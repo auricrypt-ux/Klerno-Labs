@@ -12,13 +12,18 @@ from .reporter import csv_export, summary
 from .integrations.xrp import xrpl_json_to_transactions, fetch_account_tx
 from .security import enforce_api_key, expected_api_key
 from . import store
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from io import StringIO
 
 app = FastAPI(title="Custowell Copilot API (MVP) — XRPL First")
 
 # Initialize the small SQLite database
 store.init_db()
+
+# -------- Friendly root (redirect to docs) --------
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    return RedirectResponse(url="/docs")
 
 # ---------------- Core ----------------
 
@@ -163,6 +168,31 @@ def export_csv_download(wallet: str | None = None, limit: int = 1000, auth: bool
         headers={"Content-Disposition": "attachment; filename=export.csv"},
     )
 
+# ---------------- Metrics (simple JSON) ----------------
+
+@app.get("/metrics")
+def metrics(auth: bool = Security(enforce_api_key)):
+    rows = store.list_all(limit=10000)  # sample last N transactions
+    total = len(rows)
+    if total == 0:
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}}
+
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    alerts = [r for r in rows if (r.get("risk_score") or 0) >= threshold]
+    avg_risk = sum((r.get("risk_score") or 0) for r in rows) / total
+
+    categories: Dict[str, int] = {}
+    for r in rows:
+        cat = r.get("category") or "unknown"
+        categories[cat] = categories.get(cat, 0) + 1
+
+    return {
+        "total": total,
+        "alerts": len(alerts),
+        "avg_risk": round(avg_risk, 3),
+        "categories": categories,
+    }
+
 # ---------------- Debug (no key required) ----------------
 
 @app.get("/_debug/api_key")
@@ -175,3 +205,7 @@ def debug_api_key(x_api_key: str | None = Header(default=None)):
         "expected_length": len(exp),
         "expected_preview": preview
     }
+
+@app.get("/audit")
+def get_audit(limit: int = 50, auth: bool = Security(enforce_api_key)):
+    return {"items": store.list_audit(limit=limit)}
