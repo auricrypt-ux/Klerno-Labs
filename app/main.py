@@ -209,3 +209,6 @@ def debug_api_key(x_api_key: str | None = Header(default=None)):
 @app.get("/audit")
 def get_audit(limit: int = 50, auth: bool = Security(enforce_api_key)):
     return {"items": store.list_audit(limit=limit)}
+@app.get("/_debug/routes", include_in_schema=False)
+def list_routes():
+    return {"routes": [r.path for r in app.router.routes]}
