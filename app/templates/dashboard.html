@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin-top:0">{{ title }}</h2>
+
+<div class="cards">
+  <div class="card"><div class="k">Total TX</div><div class="v">{{ metrics.total }}</div></div>
+  <div class="card"><div class="k">Alerts ≥ {{ threshold }}</div><div class="v">{{ metrics.alerts }}</div></div>
+  <div class="card"><div class="k">Avg Risk</div><div class="v">{{ metrics.avg_risk }}</div></div>
+  <div class="card"><div class="k">Categories</div><div class="v">{{ metrics.categories|length }}</div></div>
+</div>
+
+<h3 style="margin-top:24px">Category Breakdown</h3>
+<table>
+  <thead><tr><th>Category</th><th>Count</th></tr></thead>
+  <tbody>
+    {% for cat, count in metrics.categories.items() %}
+      <tr><td>{{ cat }}</td><td>{{ count }}</td></tr>
+    {% else %}
+      <tr><td colspan="2" class="muted">No categories yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="margin-top:24px">Recent Transactions</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Time</th><th>From</th><th>To</th><th>Amt</th><th>Sym</th><th>Risk</th><th>Cat</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.timestamp }}</td>
+        <td>{{ r.from_addr }}</td>
+        <td>{{ r.to_addr }}</td>
+        <td>{{ "%.4f"|format(r.amount or 0) }}</td>
+        <td>{{ r.symbol }}</td>
+        <td>{{ "%.2f"|format(r.risk_score or 0) }}</td>
+        <td><span class="pill">{{ r.category or "unknown" }}</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No transactions yet. Use “fetch_and_save”.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

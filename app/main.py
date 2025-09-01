@@ -1,9 +1,13 @@
 # app/main.py
-from fastapi import FastAPI, Security, Header
+from fastapi import FastAPI, Security, Header, Request
+from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
 from datetime import datetime
 from typing import List, Dict, Any
 import os
 import pandas as pd
+from io import StringIO
 
 from .models import Transaction, TaggedTransaction, ReportRequest
 from .guardian import score_risk
@@ -12,12 +16,15 @@ from .reporter import csv_export, summary
 from .integrations.xrp import xrpl_json_to_transactions, fetch_account_tx
 from .security import enforce_api_key, expected_api_key
 from . import store
-from fastapi.responses import StreamingResponse, RedirectResponse
-from io import StringIO
 
 app = FastAPI(title="Custowell Copilot API (MVP) — XRPL First")
 
-# Initialize the small SQLite database
+# Templates (for the dashboard UI)
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+# So templates can use {{ url_path_for('route_name') }}
+templates.env.globals["url_path_for"] = app.url_path_for
+
+# Initialize DB
 store.init_db()
 
 # -------- Friendly root (redirect to docs) --------
@@ -206,9 +213,66 @@ def debug_api_key(x_api_key: str | None = Header(default=None)):
         "expected_preview": preview
     }
 
-@app.get("/audit")
-def get_audit(limit: int = 50, auth: bool = Security(enforce_api_key)):
-    return {"items": store.list_audit(limit=limit)}
 @app.get("/_debug/routes", include_in_schema=False)
 def list_routes():
     return {"routes": [r.path for r in app.router.routes]}
+
+# ---------------- UI auth helper ----------------
+
+def _ui_auth(request: Request) -> bool:
+    """
+    Simple UI auth via query param: ?key=YOUR_API_KEY
+    This uses the same API key you set in your environment.
+    """
+    key = request.query_params.get("key") or ""
+    expected = expected_api_key() or ""
+    return key == expected
+
+# ---------------- UI: Dashboard & Alerts ----------------
+
+@app.get("/dashboard", name="ui_dashboard", include_in_schema=False)
+def ui_dashboard(request: Request):
+    if not _ui_auth(request):
+        return StreamingResponse(iter(["Unauthorized. Append ?key=YOUR_API_KEY"]), status_code=401)
+
+    rows = store.list_all(limit=200)
+    total = len(rows)
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    alerts = [r for r in rows if (r.get("risk_score") or 0) >= threshold]
+    avg_risk = round(sum((r.get("risk_score") or 0) for r in rows) / total, 3) if total else 0.0
+
+    cats: Dict[str, int] = {}
+    for r in rows:
+        c = r.get("category") or "unknown"
+        cats[c] = cats.get(c, 0) + 1
+
+    metrics = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "title": "Dashboard",
+            "key": request.query_params.get("key"),
+            "metrics": metrics,
+            "rows": rows,
+            "threshold": threshold,
+        },
+    )
+
+@app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
+def ui_alerts(request: Request):
+    if not _ui_auth(request):
+        return StreamingResponse(iter(["Unauthorized. Append ?key=YOUR_API_KEY"]), status_code=401)
+
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    rows = store.list_alerts(threshold=threshold, limit=500)
+    return templates.TemplateResponse(
+        "alerts.html",
+        {
+            "request": request,
+            "title": f"Alerts (≥ {threshold})",
+            "key": request.query_params.get("key"),
+            "rows": rows,
+        },
+    )

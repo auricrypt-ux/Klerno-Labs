@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin-top:0">{{ title }}</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Time</th><th>From</th><th>To</th><th>Amt</th><th>Sym</th><th>Risk</th><th>Flags</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.timestamp }}</td>
+        <td>{{ r.from_addr }}</td>
+        <td>{{ r.to_addr }}</td>
+        <td>{{ "%.4f"|format(r.amount or 0) }}</td>
+        <td>{{ r.symbol }}</td>
+        <td>{{ "%.2f"|format(r.risk_score or 0) }}</td>
+        <td>{{ r.risk_flags|join(", ") }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No alerts yet (or raise threshold).</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
