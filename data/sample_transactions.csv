@@ -1,0 +1,4 @@
+tx_id,timestamp,chain,from_addr,to_addr,amount,symbol,direction,memo,fee
+tx001,2025-08-01T12:00:00,XRP,rAlice,rBob,250.5,XRP,out,transfer to savings,0.02
+tx002,2025-08-02T10:00:00,ETH,0xME,0xBAD1,12000,ETH,out,,0.01
+tx003,2025-08-03T09:30:00,HBAR,hAlice,hRewards,50,HBAR,in,Airdrop reward,0.0

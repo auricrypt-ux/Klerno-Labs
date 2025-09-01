@@ -1,0 +1,12 @@
+
+allowed_paths:
+  - app/
+  - automation/
+require_tests: true
+max_patch_size_lines: 500
+rate_limit_minutes: 60
+prohibited_changes:
+  - "secrets"
+  - "network calls without timeouts"
+  - "removing human approval gates"
+approval_required: true
