@@ -1,18 +1,24 @@
 # app/store.py
 import sqlite3, json, os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # Database file lives in: <project>/data/copilot.db
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "copilot.db")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
-def _conn():
-    # Ensure the data folder exists
-    os.makedirs(os.path.join(os.path.dirname(__file__), "..", "data"), exist_ok=True)
+def _conn() -> sqlite3.Connection:
+    """Return a SQLite connection, creating the data folder if needed."""
+    os.makedirs(DATA_DIR, exist_ok=True)
     return sqlite3.connect(DB_PATH)
 
+# ------------------------------
+# Core TX storage (existing)
+# ------------------------------
+
 def init_db():
-    """Create the table if it does not exist."""
+    """Create core tables if they do not exist (txs + audit_log)."""
     con = _conn(); cur = con.cursor()
+    # Main transactions table (your original schema)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS txs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +38,11 @@ def init_db():
         notes TEXT
     )
     """)
-    con.commit(); con.close()
+    con.commit()
+    con.close()
+
+    # Also ensure audit table exists
+    init_audit()
 
 def save_tagged(t: Dict[str, Any]) -> None:
     """Insert one analyzed (tagged) transaction into the DB."""
@@ -59,7 +69,7 @@ def list_by_wallet(wallet: str, limit: int = 100) -> List[Dict[str, Any]]:
       ORDER BY id DESC LIMIT ?
     """, (wallet, wallet, limit))
     rows = cur.fetchall(); con.close()
-    out = []
+    out: List[Dict[str, Any]] = []
     for r in rows:
         out.append({
             "tx_id": r[0], "timestamp": r[1], "chain": r[2],
@@ -80,7 +90,7 @@ def list_alerts(threshold: float = 0.75, limit: int = 100) -> List[Dict[str, Any
       ORDER BY id DESC LIMIT ?
     """, (threshold, limit))
     rows = cur.fetchall(); con.close()
-    out = []
+    out: List[Dict[str, Any]] = []
     for r in rows:
         out.append({
             "tx_id": r[0], "timestamp": r[1], "chain": r[2],
@@ -100,7 +110,7 @@ def list_all(limit: int = 1000) -> List[Dict[str, Any]]:
       ORDER BY id DESC LIMIT ?
     """, (limit,))
     rows = cur.fetchall(); con.close()
-    out = []
+    out: List[Dict[str, Any]] = []
     for r in rows:
         out.append({
             "tx_id": r[0], "timestamp": r[1], "chain": r[2],
@@ -111,3 +121,78 @@ def list_all(limit: int = 1000) -> List[Dict[str, Any]]:
         })
     return out
 
+# ------------------------------
+# NEW: Audit log storage (Step 1A)
+# ------------------------------
+
+def init_audit():
+    """Create the audit_log table if it does not exist."""
+    con = _conn(); cur = con.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        route TEXT NOT NULL,
+        wallet TEXT,
+        tx_hash TEXT,
+        category TEXT,
+        risk_score REAL,
+        risk_flags TEXT,
+        status_code INTEGER NOT NULL,
+        duration_ms REAL NOT NULL,
+        note TEXT
+    )
+    """)
+    con.commit()
+    con.close()
+
+def save_audit(
+    ts: str,
+    route: str,
+    wallet: Optional[str],
+    tx_hash: Optional[str],
+    category: Optional[str],
+    risk_score: Optional[float],
+    risk_flags: Optional[list[str]],
+    status_code: int,
+    duration_ms: float,
+    note: Optional[str] = None,
+) -> None:
+    """Insert one audit row (best-effort; never raises)."""
+    try:
+        con = _conn(); cur = con.cursor()
+        cur.execute("""
+        INSERT INTO audit_log (ts, route, wallet, tx_hash, category, risk_score, risk_flags, status_code, duration_ms, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            ts, route, wallet, tx_hash, category,
+            float(risk_score) if risk_score is not None else None,
+            json.dumps(risk_flags or []),
+            int(status_code),
+            float(duration_ms),
+            note,
+        ))
+        con.commit()
+    except Exception:
+        # Never break callers because audit failed
+        pass
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
+def list_audit(limit: int = 100) -> List[Dict[str, Any]]:
+    """Return most recent audit entries (newest first)."""
+    con = _conn(); cur = con.cursor()
+    cur.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
+    cols = [c[0] for c in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    con.close()
+    # risk_flags stored as JSON string; decode for convenience
+    for r in rows:
+        try:
+            r["risk_flags"] = json.loads(r.get("risk_flags") or "[]")
+        except Exception:
+            r["risk_flags"] = []
+    return rows
