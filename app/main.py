@@ -276,3 +276,37 @@ def ui_alerts(request: Request):
             "rows": rows,
         },
     )
+from fastapi.responses import HTMLResponse
+
+@app.get("/links", include_in_schema=False)
+def ui_links():
+    html = f"""
+    <html>
+      <head>
+        <title>Custowell Quick Links</title>
+        <style>
+          body {{ font-family: Arial, sans-serif; text-align: center; padding: 40px; }}
+          a.button {{
+            display: inline-block;
+            margin: 15px;
+            padding: 15px 30px;
+            font-size: 18px;
+            color: white;
+            background: #6c63ff;
+            border-radius: 8px;
+            text-decoration: none;
+          }}
+          a.button:hover {{
+            background: #574bdb;
+          }}
+        </style>
+      </head>
+      <body>
+        <h1>Custowell Copilot Quick Links</h1>
+        <p>Use these buttons to quickly access your metrics and dashboard.</p>
+        <a class="button" href="/metrics?key={expected_api_key()}">📊 Metrics (JSON)</a>
+        <a class="button" href="/dashboard?key={expected_api_key()}">📈 Dashboard (Charts)</a>
+      </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
