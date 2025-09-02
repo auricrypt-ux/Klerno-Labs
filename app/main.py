@@ -7,7 +7,6 @@ import os
 import pandas as pd
 from fastapi import FastAPI, Security, Header, Request, Body
 from fastapi.responses import StreamingResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, EmailStr
 
 from . import store
@@ -77,15 +76,11 @@ def notify_if_alert(tagged: TaggedTransaction) -> Optional[Dict[str, Any]]:
 # =====================================================
 app = FastAPI(title="Custowell Copilot API (MVP) — XRPL First")
 
-# Templates (for the dashboard/alerts UI)
-templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
-templates.env.globals["url_path_for"] = app.url_path_for
-
 # Initialize DB
 store.init_db()
 
 # -----------------------------------------------------
-# Home (Quick Links)
+# Home (Quick Links) — simple helper page
 # -----------------------------------------------------
 @app.get("/", include_in_schema=False)
 def home():
@@ -98,16 +93,36 @@ def home():
       <title>Custowell Copilot — Quick Links</title>
       <style>
         body { font-family: system-ui, sans-serif; background:#0b1020; color:#e8ecf3; text-align:center; padding:40px; }
-        a.button { display:inline-block; margin:10px; padding:12px 24px; border-radius:8px; background:#6c63ff; color:white; text-decoration:none; }
-        a.button:hover { background:#574bdb; }
+        a.button, button { display:inline-block; margin:10px; padding:12px 24px; border-radius:8px; background:#6c63ff; color:white; text-decoration:none; border:0; cursor:pointer; }
+        a.button:hover, button:hover { background:#574bdb; }
+        input { padding:10px; border-radius:6px; border:1px solid #2a3a72; background:#0b1020; color:#e8ecf3; }
       </style>
     </head>
     <body>
       <h1>Custowell Copilot</h1>
-      <p>Use your API key to access Dashboard, Metrics, or Docs.</p>
-      <a class="button" href="/dashboard">📈 Dashboard</a>
-      <a class="button" href="/metrics">📊 Metrics</a>
-      <a class="button" href="/docs">📜 API Docs</a>
+      <p>Use your API key for protected endpoints.</p>
+
+      <div style="margin:20px 0;">
+        <input id="apikey" type="password" placeholder="x-api-key for Docs/Auth"/>
+        <a class="button" href="/docs" onclick="saveKey()">📜 Open API Docs</a>
+        <a class="button" href="/health">✅ Health</a>
+      </div>
+
+      <div>
+        <button id="btnTest">✉️ Send Admin Test Email</button>
+      </div>
+
+      <script>
+        function saveKey(){
+          const k = document.getElementById('apikey').value.trim();
+          if (k) localStorage.setItem('cw_api_key', k);
+        }
+        document.getElementById('btnTest').addEventListener('click', () => {
+          const k = (document.getElementById('apikey').value || localStorage.getItem('cw_api_key') || '').trim();
+          if (!k) { alert('Paste your API key above first.'); return; }
+          window.location.href = '/admin/test-email?key=' + encodeURIComponent(k);
+        });
+      </script>
     </body>
     </html>
     """
@@ -137,11 +152,16 @@ def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key))
     return {"saved": True, "item": tagged.model_dump(), "email": email_result}
 
 # -----------------------------------------------------
-# Admin: test email delivery
+# Admin: test email delivery (browser: /admin/test-email?key=YOUR_API_KEY)
 # -----------------------------------------------------
+def _ui_auth(request: Request) -> bool:
+    key = request.query_params.get("key") or ""
+    expected = expected_api_key() or ""
+    return key == expected
+
 @app.get("/admin/test-email", include_in_schema=False)
 def admin_test_email(request: Request):
-    if not (expected_api_key() and _ui_auth(request)):
+    if not _ui_auth(request):
         return HTMLResponse(content="Unauthorized. Append ?key=YOUR_API_KEY", status_code=401)
 
     tx = Transaction(
@@ -162,20 +182,16 @@ def admin_test_email(request: Request):
     return {"ok": True, "email": result}
 
 # -----------------------------------------------------
-# API: explicit test email (Step 3 helper)
+# API: explicit test email (requires x-api-key)
 # -----------------------------------------------------
 class NotifyRequest(BaseModel):
     email: EmailStr
 
 @app.post("/notify/test")
 def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
-    """Send a test email manually to any recipient."""
-    return _send_email("Custowell Copilot Test", "✅ Your Custowell Copilot email system is working!", payload.email)
-
-# -----------------------------------------------------
-# UI auth helper
-# -----------------------------------------------------
-def _ui_auth(request: Request) -> bool:
-    key = request.query_params.get("key") or ""
-    expected = expected_api_key() or ""
-    return key == expected
+    """Send a simple test email to any recipient (independent of alerts)."""
+    return _send_email(
+        "Custowell Copilot Test",
+        "✅ Your Custowell Copilot email system is working!",
+        payload.email,
+    )
