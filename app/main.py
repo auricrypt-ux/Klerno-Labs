@@ -1,19 +1,33 @@
 # app/main.py
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 from io import StringIO
 from typing import List, Dict, Any, Optional
 
 import os
 import pandas as pd
-from fastapi import FastAPI, Security, Header, Request, Body, HTTPException, Depends
+from dataclasses import asdict, is_dataclass, fields as dc_fields
+
+from fastapi import (
+    FastAPI,
+    Security,
+    Header,
+    Request,
+    Body,
+    HTTPException,
+    Depends,
+    Form,
+)
 from fastapi.responses import (
     StreamingResponse,
     HTMLResponse,
     JSONResponse,
+    RedirectResponse,
 )
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, EmailStr
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, EmailStr
 
 from . import store
 from .models import Transaction, TaggedTransaction, ReportRequest
@@ -22,14 +36,16 @@ from .compliance import tag_category
 from .reporter import csv_export, summary
 from .integrations.xrp import xrpl_json_to_transactions, fetch_account_tx
 from .security import enforce_api_key, expected_api_key
+from .security_session import hash_pw, verify_pw, issue_jwt
 
-# NEW (step 7): auth/paywall routers and deps for UI gating
+# Auth/Paywall routers
 from . import auth as auth_router
 from . import paywall_hooks as paywall_hooks
-from .deps import require_paid_or_admin, require_user  # require_user kept for future use
+from .deps import require_paid_or_admin, require_user
+from .routes.analyze_tags import router as analyze_tags_router
 
-# ---------- LLM helpers ----------
-# If you don't have apply_filters in llm.py, we’ll create a safe fallback below.
+
+# ---------- Optional LLM helpers ----------
 try:
     from .llm import (
         explain_tx,
@@ -37,10 +53,9 @@ try:
         ask_to_filters,
         explain_selection,
         summarize_rows,
-        apply_filters as _llm_apply_filters,   # optional
+        apply_filters as _llm_apply_filters,  # optional
     )
 except ImportError:
-    # Minimal import set if apply_filters isn't available
     from .llm import (
         explain_tx,
         explain_batch,
@@ -52,13 +67,9 @@ except ImportError:
 
 
 def _apply_filters_safe(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Fallback filter in case llm.apply_filters isn't present.
-    It supports very simple filters like {"wallet": "..."} or {"direction": "in/out"}.
-    """
+    """Fallback if llm.apply_filters isn't available."""
     if _llm_apply_filters:
         return _llm_apply_filters(rows, spec)
-
     if not spec:
         return rows
     out = rows
@@ -67,26 +78,40 @@ def _apply_filters_safe(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> Lis
     return out
 
 
+def _dump(obj: Any) -> Dict[str, Any]:
+    """Return a dict from either a Pydantic model or a dataclass (or mapping-like)."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if is_dataclass(obj):
+        return asdict(obj)
+    try:
+        return dict(obj)  # last-ditch
+    except Exception:
+        return {"value": obj}
+
+
 # =========================
 # FastAPI app + templates
 # =========================
 app = FastAPI(title="Klerno Labs API (MVP) — XRPL First")
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+# Static & templates
+BASE_DIR = os.path.dirname(__file__)
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
-templates = Jinja2Templates(
-    directory=os.path.join(os.path.dirname(__file__), "templates")
-)
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 templates.env.globals["url_path_for"] = app.url_path_for
 
-# Include modular paywall router (all paywall routes live in app/paywall.py)
-from . import paywall
-app.include_router(paywall.router)
+# Config flags for UI auth redirects
+ADMIN_EMAIL = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
-# NEW (step 7): include auth + paywall hooks routers
+# Include routers
+from . import paywall  # noqa: E402
+app.include_router(paywall.router)
 app.include_router(auth_router.router)
 app.include_router(paywall_hooks.router)
+app.include_router(analyze_tags_router)
 
 # Init DB
 store.init_db()
@@ -97,7 +122,7 @@ store.init_db()
 # =========================
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
 ALERT_FROM = os.getenv("ALERT_EMAIL_FROM", "").strip()
-ALERT_TO   = os.getenv("ALERT_EMAIL_TO", "").strip()
+ALERT_TO = os.getenv("ALERT_EMAIL_TO", "").strip()
 
 
 def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict[str, Any]:
@@ -140,29 +165,106 @@ def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
         f"Category:   {tagged.category}",
         f"Risk Score: {round(tagged.risk_score or 0, 3)}",
         f"Flags:      {', '.join(tagged.risk_flags or []) or '—'}",
-        f"Notes:      {tagged.notes or '—'}",
+        f"Notes:      {getattr(tagged, 'notes', '') or '—'}",
     ]
     return _send_email(subject, "\n".join(lines))
 
 
-# ---------------- Landing Page ----------------
+# ---------------- Landing & health ----------------
 @app.get("/", include_in_schema=False)
 def landing(request: Request):
-    # Minimal, pretty landing (your templates/landing.html)
     return templates.TemplateResponse("landing.html", {"request": request})
 
 
-# ---------------- Core API ----------------
+@app.head("/", include_in_schema=False)
+def root_head():
+    # Satisfy Render's HEAD check with 200
+    return HTMLResponse(status_code=200)
+
+
 @app.get("/health")
 def health(auth: bool = Security(enforce_api_key)):
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
 
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"status": "ok"}
+
+
+# ---------------- UI Login / Signup / Logout ----------------
+@app.get("/login", include_in_schema=False)
+def login_page(request: Request, error: str | None = None):
+    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+
+
+@app.post("/login", include_in_schema=False)
+def login_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    e = (email or "").lower().strip()
+    user = store.get_user_by_email(e)
+    if not user or not verify_pw(password, user["password_hash"]):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Invalid credentials"},
+            status_code=400,
+        )
+    token = issue_jwt(user["id"], user["email"], user["role"])
+    is_paid = bool(user.get("subscription_active")) or user.get("role") == "admin" or DEMO_MODE
+    dest = "/dashboard" if is_paid else "/paywall"
+    resp = RedirectResponse(url=dest, status_code=303)
+    # secure=True is fine on Render (HTTPS); switch to False only for local HTTP testing
+    resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    return resp
+
+
+@app.get("/signup", include_in_schema=False)
+def signup_page(request: Request, error: str | None = None):
+    return templates.TemplateResponse("signup.html", {"request": request, "error": error})
+
+
+@app.post("/signup", include_in_schema=False)
+def signup_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    e = (email or "").lower().strip()
+    if store.get_user_by_email(e):
+        return templates.TemplateResponse(
+            "signup.html",
+            {"request": request, "error": "User already exists"},
+            status_code=400,
+        )
+    role = "viewer"
+    sub_active = False
+    # Bootstrap: first user or ADMIN_EMAIL becomes admin + active sub
+    if e == ADMIN_EMAIL or store.users_count() == 0:
+        role, sub_active = "admin", True
+    user = store.create_user(e, hash_pw(password), role=role, subscription_active=sub_active)
+    token = issue_jwt(user["id"], user["email"], user["role"])
+    dest = "/dashboard" if (sub_active or role == "admin" or DEMO_MODE) else "/paywall"
+    resp = RedirectResponse(url=dest, status_code=303)
+    resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    return resp
+
+
+@app.get("/logout", include_in_schema=False)
+def logout_ui():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie("session")
+    return resp
+
+
+# ---------------- Core API ----------------
 @app.post("/analyze/tx", response_model=TaggedTransaction)
 def analyze_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
-    return TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category)
+    return TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category)
 
 
 @app.post("/analyze/batch")
@@ -171,30 +273,45 @@ def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
 
 @app.post("/report/csv")
 def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
-    df = pd.read_csv(os.path.join(os.path.dirname(__file__), "..", "data", "sample_transactions.csv"))
+    df = pd.read_csv(os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv"))
+
     # normalize timestamp to datetime for filtering
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    mask = (
-        (df["timestamp"] >= pd.to_datetime(req.start)) &
-        (df["timestamp"] <= pd.to_datetime(req.end)) &
-        (df["to_addr"].isin(req.wallet_addresses) | df["from_addr"].isin(req.wallet_addresses))
-    )
-    selected = df[mask]
+
+    # Basic guards for missing fields
+    for col in ("from_addr", "to_addr"):
+        if col not in df.columns:
+            df[col] = ""
+
+    # Support both wallet_addresses and single address field
+    wallets = set(getattr(req, "wallet_addresses", None) or ([] if not getattr(req, "address", None) else [req.address]))
+
+    start = pd.to_datetime(req.start) if getattr(req, "start", None) else df["timestamp"].min()
+    end = pd.to_datetime(req.end) if getattr(req, "end", None) else df["timestamp"].max()
+
+    mask_wallet = True if not wallets else (df["to_addr"].isin(wallets) | df["from_addr"].isin(wallets))
+    mask = (df["timestamp"] >= start) & (df["timestamp"] <= end) & mask_wallet
+    selected = df[mask].copy()
+
+    # Build Transaction safely: keep only dataclass fields
+    tx_field_names = {f.name for f in dc_fields(Transaction)}
     items: List[TaggedTransaction] = []
     for _, row in selected.iterrows():
-        d = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
-        d.setdefault("memo", "")
-        d.setdefault("notes", "")
-        tx = Transaction(**d)
+        raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
+        clean = {k: v for k, v in raw.items() if k in tx_field_names}
+        tx = Transaction(**clean)
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        items.append(TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category))
+        items.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
+
     return {"csv": csv_export(items)}
 
 
@@ -206,51 +323,46 @@ def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Securit
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
 
 @app.post("/analyze/sample")
 def analyze_sample(auth: bool = Security(enforce_api_key)):
-    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "sample_transactions.csv")
+    data_path = os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv")
     df = pd.read_csv(data_path)
 
-    # Coerce text columns (avoid NaN -> float) and normalize
+    # Coerce text columns and normalize
     text_cols = ("memo", "notes", "symbol", "direction", "chain", "tx_id", "from_addr", "to_addr")
     for col in text_cols:
         if col in df.columns:
             df[col] = df[col].fillna("").astype(str)
 
-    # Normalize timestamp to ISO8601 strings (model expects strings)
+    # Normalize timestamp (Pydantic can parse ISO strings)
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
 
-    # Coerce numeric columns (ignore errors -> NaN, which we drop to None below)
+    # Numeric
     for col in ("amount", "fee", "risk_score"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Build Transaction models safely
+    # Build transactions (dataclass)
     txs: List[Transaction] = []
+    tx_field_names = {f.name for f in dc_fields(Transaction)}
     for _, row in df.iterrows():
-        d = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
-        d.setdefault("memo", "")
-        d.setdefault("notes", "")
-        txs.append(Transaction(**d))
+        raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
+        clean = {k: v for k, v in raw.items() if k in tx_field_names}
+        txs.append(Transaction(**clean))
 
-    # Score and tag
+    # Score + tag
     tagged: List[TaggedTransaction] = []
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(
-            TaggedTransaction(
-                **tx.model_dump(),
-                risk_score=risk,
-                risk_flags=flags,
-                category=category
-            )
-        )
+        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
 
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
@@ -260,7 +372,7 @@ def analyze_sample(auth: bool = Security(enforce_api_key)):
 def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
-    tagged = TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category)
+    tagged = TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category)
     store.save_tagged(tagged.model_dump())
     email_result = notify_if_alert(tagged)
     return {"saved": True, "item": tagged.model_dump(), "email": email_result}
@@ -288,7 +400,7 @@ def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
     return {"count": len(tagged), "items": [t.model_dump() for t in tagged]}
 
 
@@ -302,7 +414,7 @@ def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enf
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged = TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category=category)
+        tagged = TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category)
         store.save_tagged(tagged.model_dump())
         saved += 1
         tagged_items.append(tagged.model_dump())
@@ -329,10 +441,7 @@ def export_csv_from_db(wallet: str | None = None, limit: int = 1000, auth: bool 
 
 
 # ---- helper: allow ?key=... or x-api-key header for download ----
-def _check_key_param_or_header(
-    key: Optional[str] = None,
-    x_api_key: Optional[str] = Header(default=None)
-):
+def _check_key_param_or_header(key: Optional[str] = None, x_api_key: Optional[str] = Header(default=None)):
     """Allow auth via ?key=... or x-api-key header (used by dashboard's window.open)."""
     exp = expected_api_key() or ""
     incoming = (key or "").strip() or (x_api_key or "").strip()
@@ -344,8 +453,8 @@ def _check_key_param_or_header(
 def export_csv_download(
     wallet: str | None = None,
     limit: int = 1000,
-    key: Optional[str] = None,                 # accept ?key=...
-    x_api_key: Optional[str] = Header(None)    # or x-api-key header
+    key: Optional[str] = None,
+    x_api_key: Optional[str] = Header(None),
 ):
     _check_key_param_or_header(key=key, x_api_key=x_api_key)
 
@@ -357,7 +466,7 @@ def export_csv_download(
     return StreamingResponse(
         iter([buf.read()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=klerno-export.csv"}
+        headers={"Content-Disposition": "attachment; filename=klerno-export.csv"},
     )
 
 
@@ -389,13 +498,13 @@ def metrics(auth: bool = Security(enforce_api_key)):
         "alerts": len(alerts),
         "avg_risk": round(avg_risk, 3),
         "categories": categories,
-        "series_by_day": series
+        "series_by_day": series,
     }
 
 
-# ---------------- UI: Dashboard & Alerts (step 7 gating) ----------------
+# ---------------- UI: Dashboard & Alerts ----------------
 @app.get("/dashboard", name="ui_dashboard", include_in_schema=False)
-def ui_dashboard(request: Request, user = Depends(require_paid_or_admin)):
+def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=200)
     total = len(rows)
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
@@ -408,31 +517,22 @@ def ui_dashboard(request: Request, user = Depends(require_paid_or_admin)):
     metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
     return templates.TemplateResponse(
         "dashboard.html",
-        {
-            "request": request,
-            "title": "Dashboard",
-            "key": None,  # no longer using ?key= for UI
-            "metrics": metrics_data,
-            "rows": rows,
-            "threshold": threshold
-        }
+        {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold},
     )
 
 
 @app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
-def ui_alerts(request: Request, user = Depends(require_paid_or_admin)):
+def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold=threshold, limit=500)
     return templates.TemplateResponse(
-        "alerts.html",
-        {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows}
+        "alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows}
     )
 
 
 # ---------------- Admin / Email tests ----------------
 @app.get("/admin/test-email", include_in_schema=False)
 def admin_test_email(request: Request):
-    # kept as-is; you can later gate with require_admin if desired
     key = request.query_params.get("key") or ""
     expected = expected_api_key() or ""
     if key != expected:
@@ -450,7 +550,7 @@ def admin_test_email(request: Request):
         fee=0.0001,
     )
     risk, flags = 0.99, ["test_high_risk"]
-    tagged = TaggedTransaction(**tx.model_dump(), risk_score=risk, risk_flags=flags, category="test-alert")
+    tagged = TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category="test-alert")
     return {"ok": True, "email": notify_if_alert(tagged)}
 
 
@@ -460,11 +560,7 @@ class NotifyRequest(BaseModel):
 
 @app.post("/notify/test")
 def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
-    return _send_email(
-        "Klerno Labs Test",
-        "✅ Your Klerno Labs email system is working!",
-        payload.email
-    )
+    return _send_email("Klerno Labs Test", "✅ Your Klerno Labs email system is working!", payload.email)
 
 
 # ---------------- Debug ----------------
@@ -472,12 +568,7 @@ def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforc
 def debug_api_key(x_api_key: str | None = Header(default=None)):
     exp = expected_api_key()
     preview = (exp[:4] + "..." + exp[-4:]) if exp else ""
-    return {
-        "received_header": x_api_key,
-        "expected_loaded_from_env": bool(exp),
-        "expected_length": len(exp or ""),
-        "expected_preview": preview
-    }
+    return {"received_header": x_api_key, "expected_loaded_from_env": bool(exp), "expected_length": len(exp or ""), "expected_preview": preview}
 
 
 @app.get("/_debug/routes", include_in_schema=False)
@@ -497,7 +588,7 @@ class BatchTx(BaseModel):
 @app.post("/explain/tx")
 def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key)):
     try:
-        text = explain_tx(tx.model_dump(mode="json"))  # ensure JSON-safe
+        text = explain_tx(_dump(tx))
         return {"explanation": text}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -506,7 +597,7 @@ def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key))
 @app.post("/explain/batch")
 def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_key)):
     try:
-        txs = [t.model_dump(mode="json") for t in payload.items]
+        txs = [_dump(t) for t in payload.items]
         result = explain_batch(txs)
         return result
     except Exception as e:

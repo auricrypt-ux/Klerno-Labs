@@ -10,6 +10,7 @@ numpy==1.26.4
 jinja2==3.1.3
 requests==2.31.0
 python-dotenv==1.0.1
+pyyaml==6.0.2
 
 # --- Email / Alerts ---
 sendgrid==6.11.0
@@ -20,11 +21,13 @@ xrpl-py==2.6.0
 
 # --- OpenAI (legacy SDK compatible with xrpl-py httpx pin) ---
 openai==0.28.1
+# lock transitive HTTP stack to what your build used (prevents surprise upgrades)
+httpx==0.24.1
+httpcore==0.17.3
 
 # --- Auth / Crypto ---
 PyJWT==2.8.0
 passlib[bcrypt]==1.7.4
 
-PyYAML==6.0.2
+# --- Forms (FastAPI uploads/form data) ---
 python-multipart==0.0.9
-
