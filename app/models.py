@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List, Dict
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 
 
 # ----------------------------
@@ -27,6 +27,7 @@ class Transaction:
     # Common extras used by your code
     fee: Decimal = Decimal("0")
     memo: Optional[str] = ""
+    notes: Optional[str] = ""                     # <─ added so emails/CSV don’t break
     tags: List[str] = field(default_factory=list)
     is_internal: bool = False
 
@@ -46,7 +47,8 @@ class Transaction:
 class TaggedTransaction(BaseModel):
     """
     Transaction + tagging results for API responses.
-    Supports inputs with either 'from_addr'/'to_addr' or 'from_address'/'to_address'.
+    Accepts inputs with either 'from_addr'/'to_addr' or 'from_address'/'to_address'.
+    Also accepts old 'score'/'flags' but serializes as 'risk_score'/'risk_flags'.
     """
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -55,9 +57,9 @@ class TaggedTransaction(BaseModel):
     timestamp: datetime
     chain: str = "XRP"
 
-    # Canonical fields are from_addr/to_addr; accept alias inputs too
+    # Canonical fields are from_addr/to_addr; also accept from_address/to_address
     from_addr: Optional[str] = Field(default=None, alias="from_address")
-    to_addr: Optional[str] = Field(default=None, alias="to_address")
+    to_addr: Optional[str]   = Field(default=None, alias="to_address")
 
     amount: Decimal
     symbol: str = "XRP"
@@ -65,15 +67,25 @@ class TaggedTransaction(BaseModel):
 
     fee: Decimal = Decimal("0")
     memo: Optional[str] = None
+    notes: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     is_internal: bool = False
 
     # Tagging outputs
     category: Optional[str] = None
-    score: Optional[float] = None
-    flags: List[str] = Field(default_factory=list)
 
-    # Convenience accessors so code can read .from_address/.to_address too
+    # Accept both 'risk_score' and legacy 'score' on input; serialize as 'risk_score'
+    risk_score: Optional[float] = Field(
+        default=None,
+        validation_alias=AliasChoices("risk_score", "score")
+    )
+    # Accept both 'risk_flags' and legacy 'flags' on input; serialize as 'risk_flags'
+    risk_flags: List[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("risk_flags", "flags")
+    )
+
+    # Convenience accessors so code can read .from_address/.to_address or .score/.flags too
     @property
     def from_address(self) -> Optional[str]:
         return self.from_addr
@@ -81,6 +93,14 @@ class TaggedTransaction(BaseModel):
     @property
     def to_address(self) -> Optional[str]:
         return self.to_addr
+
+    @property
+    def score(self) -> Optional[float]:
+        return self.risk_score
+
+    @property
+    def flags(self) -> List[str]:
+        return self.risk_flags
 
 
 class ReportRequest(BaseModel):
@@ -93,6 +113,7 @@ class ReportRequest(BaseModel):
     end: Optional[datetime] = None
     min_amount: Optional[Decimal] = None
     max_amount: Optional[Decimal] = None
+    wallet_addresses: List[str] = Field(default_factory=list)   # <─ used in /report/csv
 
 
 class ReportSummary(BaseModel):
