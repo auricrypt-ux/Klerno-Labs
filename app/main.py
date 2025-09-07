@@ -44,7 +44,6 @@ from . import paywall_hooks as paywall_hooks
 from .deps import require_paid_or_admin, require_user
 from .routes.analyze_tags import router as analyze_tags_router
 
-
 # ---------- Optional LLM helpers ----------
 try:
     from .llm import (
@@ -202,7 +201,7 @@ def login_page(request: Request, error: str | None = None):
 def login_submit(
     request: Request,
     email: str = Form(...),
-    password: str = Form(...)
+    password: str = Form(...),
 ):
     e = (email or "").lower().strip()
     user = store.get_user_by_email(e)
@@ -216,7 +215,6 @@ def login_submit(
     is_paid = bool(user.get("subscription_active")) or user.get("role") == "admin" or DEMO_MODE
     dest = "/dashboard" if is_paid else "/paywall"
     resp = RedirectResponse(url=dest, status_code=303)
-    # secure=True is fine on Render (HTTPS); switch to False only for local HTTP testing
     resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
     return resp
 
@@ -230,7 +228,7 @@ def signup_page(request: Request, error: str | None = None):
 def signup_submit(
     request: Request,
     email: str = Form(...),
-    password: str = Form(...)
+    password: str = Form(...),
 ):
     e = (email or "").lower().strip()
     if store.get_user_by_email(e):
