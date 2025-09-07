@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -48,7 +48,6 @@ class TaggedTransaction(BaseModel):
     Transaction + tagging results for API responses.
     Supports inputs with either 'from_addr'/'to_addr' or 'from_address'/'to_address'.
     """
-    # allow validating from dataclass/ORM objects and accept aliases
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     # Base tx fields
@@ -85,9 +84,7 @@ class TaggedTransaction(BaseModel):
 
 
 class ReportRequest(BaseModel):
-    """
-    Minimal report request model; extend as your endpoints require.
-    """
+    """Input model for generating reports/exports."""
     model_config = ConfigDict(populate_by_name=True)
 
     address: Optional[str] = None
@@ -96,3 +93,27 @@ class ReportRequest(BaseModel):
     end: Optional[datetime] = None
     min_amount: Optional[Decimal] = None
     max_amount: Optional[Decimal] = None
+
+
+class ReportSummary(BaseModel):
+    """
+    Output model for summary endpoints/exports.
+    Flexible defaults so reporter code can set more fields if needed.
+    """
+    model_config = ConfigDict(extra="allow")  # tolerate extra fields if reporter adds them
+
+    address: Optional[str] = None
+    chain: Optional[str] = "XRP"
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+
+    # Totals & counts
+    count_in: int = 0
+    count_out: int = 0
+    total_in: Decimal = Decimal("0")
+    total_out: Decimal = Decimal("0")
+    total_fees: Decimal = Decimal("0")
+    net: Decimal = Decimal("0")
+
+    # Optional breakdowns
+    categories: Dict[str, int] = Field(default_factory=dict)
