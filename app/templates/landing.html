@@ -30,7 +30,8 @@
 
     /* top nav */
     .topbar{position:sticky; top:0; z-index:3; display:flex; align-items:center; justify-content:space-between; padding:14px 22px; background:linear-gradient(180deg, rgba(10,16,31,.75), rgba(10,16,31,.25)); border-bottom:1px solid var(--stroke); backdrop-filter:blur(10px)}
-    .brand-mini{display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--ink)}
+    .brand-mini{display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--ink); font-size:0; line-height:0;} /* hide any stray text */
+    .brand-mini strong, .brand-mini span{display:none!important;} /* belt & suspenders */
     .brand-mini img{height:22px; width:auto; display:block; filter:drop-shadow(0 4px 16px rgba(142,197,255,.25))}
     .nav-actions{display:flex; gap:10px; align-items:center}
     .btn{ display:inline-flex; align-items:center; gap:10px; padding:10px 14px; border-radius:12px; border:1px solid var(--stroke); background:rgba(255,255,255,.06); color:var(--ink); text-decoration:none; transition:transform .12s ease, background .12s ease, border-color .12s ease, box-shadow .12s ease; cursor:pointer; font-weight:800; font-size:14px }
@@ -229,7 +230,6 @@
         return;
       }
 
-      // Fetch /metrics using x-api-key header
       fetch('/metrics', { headers: { 'x-api-key': key } })
         .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
         .then(data => {
@@ -237,7 +237,7 @@
           openBtn.href = new URL('/dashboard', window.location.origin).toString() + `?key=${encodeURIComponent(key)}`;
           openBtn.textContent = 'Open';
 
-          const series = (data.series_by_day || []).slice(-30); // last ~30 points
+          const series = (data.series_by_day || []).slice(-30);
           drawSparkline(canvas, series.map(d => ({ x: new Date(d.date), y: +d.avg_risk || 0 })));
         })
         .catch(() => {
@@ -254,7 +254,6 @@
         const ctx = cv.getContext('2d');
         ctx.scale(dpr,dpr);
 
-        // padding
         const pad = 16, top=14, bottom=24;
         const innerW = w - pad*2, innerH = h - top - bottom;
         if (!pts.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data', w/2-20, h/2); return; }
@@ -264,10 +263,9 @@
         const minX = Math.min(...xs), maxX = Math.max(...xs);
         const minY = Math.min(...ys, 0), maxY = Math.max(...ys, 1);
 
-        const xScale = t => pad + ( (t-minX)/(maxX-minX || 1) ) * innerW;
+        const xScale = t => pad + ((t-minX)/(maxX-minX || 1)) * innerW;
         const yScale = v => top + innerH - ((v-minY)/(maxY-minY || 1)) * innerH;
 
-        // gradient fill
         const grad = ctx.createLinearGradient(0, top, 0, top+innerH);
         grad.addColorStop(0, 'rgba(123,108,255,.45)');
         grad.addColorStop(1, 'rgba(123,108,255,0)');
@@ -280,7 +278,6 @@
         ctx.fillStyle = grad;
         ctx.fill();
 
-        // line
         ctx.beginPath();
         ctx.moveTo(xScale(xs[0]), yScale(ys[0]));
         for (let i=1;i<pts.length;i++) ctx.lineTo(xScale(xs[i]), yScale(ys[i]));
@@ -288,7 +285,6 @@
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // last point dot
         const lx = xScale(xs[pts.length-1]), ly = yScale(ys[pts.length-1]);
         ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI*2); ctx.fillStyle='#a7f3ff'; ctx.fill();
       }
