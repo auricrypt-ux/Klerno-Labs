@@ -1,0 +1,11 @@
+priority:
+  - fee
+  - trade
+  - income
+  - transfer
+
+keywords:
+  income:   ["salary", "airdrop", "reward", "interest", "yield"]
+  fee:      ["fee", "gas", "network"]
+  trade:    ["swap", "trade", "exchange"]
+  transfer: ["transfer", "send", "receive"]

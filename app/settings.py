@@ -3,6 +3,7 @@ import os
 from functools import lru_cache
 
 class Settings:
+    # Env is read at import time; fine for simple configs
     app_env = os.getenv("APP_ENV", "dev")
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true"
 

@@ -89,6 +89,11 @@ def _dump(obj: Any) -> Dict[str, Any]:
         return {"value": obj}
 
 
+# NEW: unified reader for old/new score keys
+def _row_score(r: Dict[str, Any]) -> float:
+    return float(r.get("score") if r.get("score") is not None else r.get("risk_score", 0) or 0)
+
+
 # =========================
 # FastAPI app + templates
 # =========================
@@ -147,12 +152,12 @@ def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict
 
 
 def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
-    """If risk >= threshold, email an alert."""
+    """If risk >= threshold, email an alert. Uses new .score/.flags fields."""
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
-    if (tagged.risk_score or 0) < threshold:
-        return {"sent": False, "reason": f"risk_score {tagged.risk_score} < threshold {threshold}"}
+    if (tagged.score or 0) < threshold:
+        return {"sent": False, "reason": f"score {tagged.score} < threshold {threshold}"}
 
-    subject = f"[Klerno Labs Alert] {tagged.category or 'unknown'} — risk {round(tagged.risk_score or 0, 3)}"
+    subject = f"[Klerno Labs Alert] {tagged.category or 'unknown'} — risk {round(tagged.score or 0, 3)}"
     lines = [
         f"Time:       {tagged.timestamp}",
         f"Chain:      {tagged.chain}",
@@ -162,8 +167,8 @@ def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
         f"Direction:  {tagged.direction}",
         f"Fee:        {tagged.fee}",
         f"Category:   {tagged.category}",
-        f"Risk Score: {round(tagged.risk_score or 0, 3)}",
-        f"Flags:      {', '.join(tagged.risk_flags or []) or '—'}",
+        f"Risk Score: {round(tagged.score or 0, 3)}",
+        f"Flags:      {', '.join(tagged.flags or []) or '—'}",
         f"Notes:      {getattr(tagged, 'notes', '') or '—'}",
     ]
     return _send_email(subject, "\n".join(lines))
@@ -262,7 +267,7 @@ def logout_ui():
 def analyze_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
-    return TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category)
+    return TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
 
 
 @app.post("/analyze/batch")
@@ -271,7 +276,7 @@ def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
 
@@ -308,7 +313,7 @@ def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
         tx = Transaction(**clean)
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        items.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
+        items.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
 
     return {"csv": csv_export(items)}
 
@@ -321,7 +326,7 @@ def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Securit
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
 
@@ -360,7 +365,7 @@ def analyze_sample(auth: bool = Security(enforce_api_key)):
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
 
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
@@ -370,10 +375,14 @@ def analyze_sample(auth: bool = Security(enforce_api_key)):
 def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
-    tagged = TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category)
-    store.save_tagged(tagged.model_dump())
+    tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
+    # back-compat fields when saving
+    d = tagged.model_dump()
+    d["risk_score"] = d.get("score")
+    d["risk_flags"] = d.get("flags")
+    store.save_tagged(d)
     email_result = notify_if_alert(tagged)
-    return {"saved": True, "item": tagged.model_dump(), "email": email_result}
+    return {"saved": True, "item": d, "email": email_result}
 
 
 @app.get("/transactions/{wallet}")
@@ -398,7 +407,7 @@ def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged.append(TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category))
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"count": len(tagged), "items": [t.model_dump() for t in tagged]}
 
 
@@ -412,10 +421,13 @@ def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enf
     for tx in txs:
         risk, flags = score_risk(tx)
         category = tag_category(tx)
-        tagged = TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category=category)
-        store.save_tagged(tagged.model_dump())
+        tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
+        d = tagged.model_dump()
+        d["risk_score"] = d.get("score")
+        d["risk_flags"] = d.get("flags")
+        store.save_tagged(d)
         saved += 1
-        tagged_items.append(tagged.model_dump())
+        tagged_items.append(d)
         emails.append(notify_if_alert(tagged))
     return {
         "account": account,
@@ -476,8 +488,8 @@ def metrics(auth: bool = Security(enforce_api_key)):
     if total == 0:
         return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
-    alerts = [r for r in rows if (r.get("risk_score") or 0) >= threshold]
-    avg_risk = sum((r.get("risk_score") or 0) for r in rows) / total
+    alerts = [r for r in rows if _row_score(r) >= threshold]
+    avg_risk = sum(_row_score(r) for r in rows) / total
     categories: Dict[str, int] = {}
     for r in rows:
         cat = r.get("category") or "unknown"
@@ -485,7 +497,8 @@ def metrics(auth: bool = Security(enforce_api_key)):
     try:
         df = pd.DataFrame(rows)
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        df["risk_score"] = pd.to_numeric(df["risk_score"], errors="coerce").fillna(0.0)
+        # normalize to a single column used for grouping/averaging
+        df["risk_score"] = df.apply(lambda r: _row_score(r), axis=1)
         df["day"] = df["timestamp"].dt.date
         grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
         series = [{"date": str(d), "avg_risk": round(float(v), 3)} for d, v in zip(grp["day"], grp["avg_risk"])]
@@ -506,8 +519,8 @@ def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=200)
     total = len(rows)
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
-    alerts = [r for r in rows if (r.get("risk_score") or 0) >= threshold]
-    avg_risk = round(sum((r.get("risk_score") or 0) for r in rows) / total, 3) if total else 0.0
+    alerts = [r for r in rows if _row_score(r) >= threshold]
+    avg_risk = round(sum(_row_score(r) for r in rows) / total, 3) if total else 0.0
     cats: Dict[str, int] = {}
     for r in rows:
         c = r.get("category") or "unknown"
@@ -547,8 +560,7 @@ def admin_test_email(request: Request):
         memo="Test email",
         fee=0.0001,
     )
-    risk, flags = 0.99, ["test_high_risk"]
-    tagged = TaggedTransaction(**_dump(tx), risk_score=risk, risk_flags=flags, category="test-alert")
+    tagged = TaggedTransaction(**_dump(tx), score=0.99, flags=["test_high_risk"], category="test-alert")
     return {"ok": True, "email": notify_if_alert(tagged)}
 
 
