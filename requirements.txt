@@ -31,3 +31,5 @@ passlib[bcrypt]==1.7.4
 
 # --- Forms (FastAPI uploads/form data) ---
 python-multipart==0.0.9
+
+psycopg2-binary==2.9.9
