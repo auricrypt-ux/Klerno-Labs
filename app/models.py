@@ -1,34 +1,34 @@
+﻿# app/models.py
+from __future__ import annotations
 
-from pydantic import BaseModel, Field
-from typing import Optional, List, Literal
+from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
+from typing import Optional, List
 
-class Transaction(BaseModel):
-    tx_id: str
-    timestamp: datetime
-    chain: str = Field(description="e.g., XRP, ETH, BTC, HBAR, XLM")
-    from_addr: str
-    to_addr: str
-    amount: float
-    symbol: str = Field(description="Token symbol, e.g., XRP, ETH")
-    direction: Literal["in", "out"]
-    memo: Optional[str] = None
-    fee: Optional[float] = 0.0
+@dataclass
+class Transaction:
+    # Fields your tests pass in
+    tx_id: str = ""
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    chain: str = "XRP"
+    from_addr: Optional[str] = None
+    to_addr: Optional[str] = None
+    amount: Decimal = Decimal("0")
+    symbol: str = "XRP"
+    direction: str = "out"
 
-class TaggedTransaction(Transaction):
-    category: Literal["trade","transfer","income","expense","fee","unknown"] = "unknown"
-    risk_score: float = 0.0
-    risk_flags: List[str] = []
-    notes: Optional[str] = None
+    # Common extras used by your code
+    fee: Decimal = Decimal("0")
+    memo: Optional[str] = ""
+    tags: List[str] = field(default_factory=list)
+    is_internal: bool = False
 
-class ReportRequest(BaseModel):
-    wallet_addresses: List[str]
-    start: datetime
-    end: datetime
+    # Back-compat for code that expects from_address/to_address
+    @property
+    def from_address(self) -> Optional[str]:
+        return self.from_addr
 
-class ReportSummary(BaseModel):
-    total_in: float
-    total_out: float
-    fees: float
-    suspicious_count: int
-    transactions: int
+    @property
+    def to_address(self) -> Optional[str]:
+        return self.to_addr
