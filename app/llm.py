@@ -6,35 +6,66 @@ import statistics as stats
 from datetime import datetime
 from typing import List, Dict, Any
 
-from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()
 
-# ===== OpenAI client =====
-# Make sure OPENAI_API_KEY is set in your environment before starting the server
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-
-# Choose a solid, fast reasoning-capable small model for summaries/explanations
+# ===== OpenAI client (compatible with both legacy 0.28.x and v1+) =====
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+_DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
-# ---------- helpers ----------
+_use_v1 = False
+_client_v1 = None
+
+# Try the modern SDK first (v1+)
+try:
+    from openai import OpenAI  # only in v1+
+    _client_v1 = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else OpenAI()
+    _use_v1 = True
+except Exception:
+    _use_v1 = False
+
+if not _use_v1:
+    # Fall back to legacy 0.28.x
+    import openai as _openai_legacy
+    if OPENAI_API_KEY:
+        _openai_legacy.api_key = OPENAI_API_KEY
+
+
 def _safe_llm(system: str, user: str, temperature: float = 0.2) -> str:
     """
     Ask the LLM safely. If anything fails, return a graceful fallback string.
+    Works with both OpenAI SDK v1+ and legacy 0.28.x.
     """
-    if not os.getenv("OPENAI_API_KEY"):
+    if not OPENAI_API_KEY:
         return "LLM not configured: set OPENAI_API_KEY."
 
     try:
-        resp = _client.chat.completions.create(
-            model=_LLM_MODEL,
-            temperature=temperature,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        return (resp.choices[0].message.content or "").strip()
+        if _use_v1:
+            resp = _client_v1.chat.completions.create(
+                model=_LLM_MODEL,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            return (resp.choices[0].message.content or "").strip()
+        else:
+            resp = _openai_legacy.ChatCompletion.create(
+                model=_LLM_MODEL if _LLM_MODEL else "gpt-3.5-turbo",
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            return (resp["choices"][0]["message"]["content"] or "").strip()
     except Exception as e:
+        if _DEMO_MODE:
+            return f"(DEMO MODE fallback; LLM error: {e})"
         return f"(LLM error: {e})"
+
 
 def _fmt_amount(v):
     try:
@@ -47,11 +78,13 @@ def _fmt_amount(v):
     except Exception:
         return str(v)
 
+
 def _parse_iso(ts: Any) -> datetime | None:
     try:
         return datetime.fromisoformat(str(ts))
     except Exception:
         return None
+
 
 # =========================================================
 # 1) Single-transaction explanation
@@ -60,7 +93,6 @@ def explain_tx(tx: Dict[str, Any]) -> str:
     """
     Return a natural-language explanation of a single transaction.
     """
-    # short deterministic preface for users even if LLM fails
     pre = [
         f"Transaction {tx.get('tx_id', '—')} on {tx.get('chain', 'unknown')}:",
         f"  from {tx.get('from_addr', '—')} to {tx.get('to_addr', '—')}",
@@ -74,12 +106,10 @@ def explain_tx(tx: Dict[str, Any]) -> str:
         "Explain the transaction succinctly (5-8 sentences), focusing on risk-relevant details, "
         "direction, counterparties, and any anomalies. Avoid hedging."
     )
-    user = (
-        "Explain this JSON transaction for a compliance analyst:\n"
-        + json.dumps(tx, ensure_ascii=False, indent=2)
-    )
+    user = "Explain this JSON transaction for a compliance analyst:\n" + json.dumps(tx, ensure_ascii=False, indent=2)
     llm = _safe_llm(system, user)
     return preface + "\n\n" + llm
+
 
 # =========================================================
 # 2) Batch explanation
@@ -94,7 +124,6 @@ def explain_batch(txs: List[Dict[str, Any]]) -> Dict[str, Any]:
         text = explain_tx(t)
         items.append({"tx_id": t.get("tx_id"), "explanation": text})
 
-    # light stats for context
     amounts = [float(t.get("amount", 0) or 0) for t in txs if isinstance(t.get("amount", 0), (int, float, str))]
     risk_scores = [float(t.get("risk_score", 0) or 0) for t in txs]
 
@@ -115,19 +144,14 @@ def explain_batch(txs: List[Dict[str, Any]]) -> Dict[str, Any]:
     batch_summary = _safe_llm(system, user)
     return {"items": items, "summary": batch_summary}
 
+
 # =========================================================
 # 3) Natural-language filters spec
 # =========================================================
 def ask_to_filters(question: str) -> Dict[str, Any]:
     """
-    Ask the LLM to produce a JSON filter spec describing how to filter rows.
-    The JSON must be a dict with keys among:
-      - date_from (ISO), date_to (ISO)
-      - min_risk (0-1), max_risk (0-1)
-      - categories (list[str])
-      - include_wallets (list[str])
-      - exclude_wallets (list[str])
-    If parsing fails, return a minimal spec.
+    Convert a question into a JSON filter spec.
+    Keys: date_from, date_to, min_risk, max_risk, categories, include_wallets, exclude_wallets.
     """
     system = (
         "You convert a user's plain-English question into a JSON filter spec for transactions. "
@@ -142,21 +166,17 @@ def ask_to_filters(question: str) -> Dict[str, Any]:
             raise ValueError("Spec was not a dict")
         return spec
     except Exception:
-        # fallback minimal spec
         return {}
+
 
 # =========================================================
 # 4) Apply filters to local rows
 # =========================================================
 def apply_filters(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Filter rows according to the spec produced by ask_to_filters().
-    """
     if not rows:
         return []
 
     df = spec  # shorthand
-
     date_from = _parse_iso(df.get("date_from")) if df.get("date_from") else None
     date_to   = _parse_iso(df.get("date_to"))   if df.get("date_to")   else None
     min_risk  = float(df.get("min_risk", 0)) if df.get("min_risk") is not None else None
@@ -167,14 +187,12 @@ def apply_filters(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict
 
     out = []
     for r in rows:
-        # time window
         ts = _parse_iso(r.get("timestamp"))
         if date_from and (not ts or ts < date_from):
             continue
         if date_to and (not ts or ts > date_to):
             continue
 
-        # risk range
         risk = None
         try:
             risk = float(r.get("risk_score")) if r.get("risk_score") is not None else None
@@ -186,12 +204,10 @@ def apply_filters(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict
         if max_risk is not None and (risk is None or risk > max_risk):
             continue
 
-        # category
         cat = str(r.get("category", "unknown")).lower()
         if cats and cat not in cats:
             continue
 
-        # wallets include/exclude
         from_w = str(r.get("from_addr", ""))
         to_w = str(r.get("to_addr", ""))
 
@@ -204,18 +220,15 @@ def apply_filters(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict
 
     return out
 
+
 # =========================================================
-# 5) Explain a filtered selection in context of a question
+# 5) Explain a filtered selection
 # =========================================================
 def explain_selection(question: str, rows: List[Dict[str, Any]]) -> str:
-    """
-    Provide a short answer/summary about the selected rows for the analyst.
-    """
     n = len(rows)
     if n == 0:
         return "No rows matched the criteria."
 
-    # quick stats for grounding
     risks = [float(r.get("risk_score", 0) or 0) for r in rows]
     avg_risk = round(sum(risks) / len(risks), 3) if risks else 0.0
     cats: Dict[str, int] = {}
@@ -234,13 +247,11 @@ def explain_selection(question: str, rows: List[Dict[str, Any]]) -> str:
     )
     return _safe_llm(system, user)
 
+
 # =========================================================
-# 6) Summarize last N days or any passed slice for dashboard
+# 6) Summarize rows for dashboard
 # =========================================================
 def summarize_rows(rows: List[Dict[str, Any]], title: str = "Summary") -> Dict[str, Any]:
-    """
-    Return a dict with a few KPIs and a short LLM commentary.
-    """
     n = len(rows)
     if n == 0:
         return {"title": title, "count": 0, "kpis": {}, "commentary": "No recent activity."}

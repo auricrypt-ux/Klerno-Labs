@@ -1,5 +1,9 @@
 {
   "python.analysis.diagnosticSeverityOverrides": {
     "reportMissingImports": "none"
+  },
+  "search.exclude": {
+    "**/venv": true,
+    "**/.venv": true
   }
 }
