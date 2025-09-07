@@ -1,27 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
-<h2 style="margin-top:0">{{ title }}</h2>
 
-<table>
-  <thead>
-    <tr>
-      <th>Time</th><th>From</th><th>To</th><th>Amt</th><th>Sym</th><th>Risk</th><th>Flags</th>
-    </tr>
-  </thead>
-  <tbody>
+<h1 class="text-2xl font-semibold mb-4">Alerts (≥ {{ threshold }})</h1>
+
+{% if rows %}
+  <div class="grid gap-4">
     {% for r in rows %}
-      <tr>
-        <td>{{ r.timestamp }}</td>
-        <td>{{ r.from_addr }}</td>
-        <td>{{ r.to_addr }}</td>
-        <td>{{ "%.4f"|format(r.amount or 0) }}</td>
-        <td>{{ r.symbol }}</td>
-        <td>{{ "%.2f"|format(r.risk_score or 0) }}</td>
-        <td>{{ r.risk_flags|join(", ") }}</td>
-      </tr>
-    {% else %}
-      <tr><td colspan="7" class="muted">No alerts yet (or raise threshold).</td></tr>
+      <div class="card p-4">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">{{ r.get('category') or 'unknown' }}</div>
+          <div class="text-sm text-[var(--muted)]">{{ r.get('timestamp') }}</div>
+        </div>
+
+        <div class="mt-2 text-sm">
+          <div><span class="text-[var(--muted)]">Tx:</span> {{ r.get('tx_id') }}</div>
+          <div class="truncate"><span class="text-[var(--muted)]">From → To:</span> {{ r.get('from_addr') }} → {{ r.get('to_addr') }}</div>
+          <div><span class="text-[var(--muted)]">Amount:</span> {{ r.get('amount') }} {{ r.get('symbol') or '' }}</div>
+          <div>
+            <span class="text-[var(--muted)]">Risk:</span>
+            <span class="font-semibold text-[var(--danger)]">{{ "%.3f"|format(r.get('risk_score') or 0) }}</span>
+          </div>
+          {% set flags = r.get('risk_flags') or [] %}
+          <div class="mt-2 flex flex-wrap gap-2">
+            {% for f in flags %}
+              <span class="chip px-2 py-0.5 rounded text-xs">{{ f }}</span>
+            {% endfor %}
+            {% if not flags %}<span class="text-[var(--muted)]">No flags</span>{% endif %}
+          </div>
+        </div>
+      </div>
     {% endfor %}
-  </tbody>
-</table>
+  </div>
+{% else %}
+  <div class="card p-6 text-[var(--muted)]">No alerts yet.</div>
+{% endif %}
+
 {% endblock %}

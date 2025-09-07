@@ -1,47 +1,348 @@
-{% extends "base.html" %}
-{% block content %}
-<h2 style="margin-top:0">{{ title }}</h2>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Klerno Labs — Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#111831; --line:#1e2a52; --ink:#e8ecf3;
+      --muted:#9aa9c6; --cta:#6c63ff; --good:#2ecc71; --warn:#ffa940;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+         background:var(--bg); color:var(--ink)}
 
-<div class="cards">
-  <div class="card"><div class="k">Total TX</div><div class="v">{{ metrics.total }}</div></div>
-  <div class="card"><div class="k">Alerts ≥ {{ threshold }}</div><div class="v">{{ metrics.alerts }}</div></div>
-  <div class="card"><div class="k">Avg Risk</div><div class="v">{{ metrics.avg_risk }}</div></div>
-  <div class="card"><div class="k">Categories</div><div class="v">{{ metrics.categories|length }}</div></div>
-</div>
+    /* === animated background (added) === */
+    canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
+    .vignette{
+      position:fixed; inset:0; z-index:1; pointer-events:none;
+      background:radial-gradient(1200px 600px at 70% 20%,transparent 0%,rgba(0,0,0,.35) 70%,rgba(0,0,0,.7) 100%);
+      mix-blend-mode:multiply;
+    }
 
-<h3 style="margin-top:24px">Category Breakdown</h3>
-<table>
-  <thead><tr><th>Category</th><th>Count</th></tr></thead>
-  <tbody>
-    {% for cat, count in metrics.categories.items() %}
-      <tr><td>{{ cat }}</td><td>{{ count }}</td></tr>
-    {% else %}
-      <tr><td colspan="2" class="muted">No categories yet.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+    .wrap{max-width:1100px; margin:32px auto; padding:0 16px; position:relative; z-index:2}
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px}
 
-<h3 style="margin-top:24px">Recent Transactions</h3>
-<table>
-  <thead>
-    <tr>
-      <th>Time</th><th>From</th><th>To</th><th>Amt</th><th>Sym</th><th>Risk</th><th>Cat</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in rows %}
-      <tr>
-        <td>{{ r.timestamp }}</td>
-        <td>{{ r.from_addr }}</td>
-        <td>{{ r.to_addr }}</td>
-        <td>{{ "%.4f"|format(r.amount or 0) }}</td>
-        <td>{{ r.symbol }}</td>
-        <td>{{ "%.2f"|format(r.risk_score or 0) }}</td>
-        <td><span class="pill">{{ r.category or "unknown" }}</span></td>
-      </tr>
-    {% else %}
-      <tr><td colspan="7" class="muted">No transactions yet. Use “fetch_and_save”.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endblock %}
+    /* brand wordmark in header (added earlier) */
+    .brand{display:flex; align-items:center; gap:10px; text-decoration:none}
+    .brand .wordmark{
+      height:28px; display:block;
+      filter:drop-shadow(0 2px 10px rgba(108,99,255,.25));
+      transition:transform .12s ease, filter .2s ease;
+    }
+    @media (min-width:900px){ .brand .wordmark{ height:32px } }
+    .brand:hover .wordmark{ transform:translateY(-1px); filter:drop-shadow(0 4px 16px rgba(108,99,255,.35)) }
+
+    h1{margin:0; font-size:24px; font-weight:700}
+    .pill{padding:6px 10px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:12px}
+    .row{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0}
+    @media (max-width:920px){ .row{grid-template-columns:1fr} }
+    .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px}
+    .kpi{font-size:28px; font-weight:700; letter-spacing:-.02em}
+    .muted{color:var(--muted)}
+    .actions{display:flex; gap:10px; flex-wrap:wrap}
+    .btn{display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:#151e3c; color:var(--ink); text-decoration:none; cursor:pointer}
+    .btn.cta{background:var(--cta); border-color:#574bdb; color:white}
+    .grid2{display:grid; grid-template-columns:2fr 1fr; gap:14px}
+    @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
+    canvas{width:100%; height:220px; display:block}
+    table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+    th,td{padding:10px 12px; border-bottom:1px solid var(--line); font-size:14px}
+    th{background:#0f1630; text-align:left; color:#cbd5f7}
+    tr:last-child td{border-bottom:none}
+    .tag{padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#cfe1ff}
+    .ok{color:var(--good)}
+    .warn{color:var(--warn)}
+    .note{font-size:12px; color:var(--muted)}
+    .right{display:flex; align-items:center; gap:10px}
+    input[type="password"]{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0b1020; color:var(--ink)}
+  </style>
+</head>
+<body>
+  <!-- animated background (added) -->
+  <canvas id="bg" aria-hidden="true"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <header>
+      <!-- replaced title with wordmark -->
+      <a class="brand" href="/">
+        <img class="wordmark" src="/static/klerno-wordmark.png" alt="Klerno Labs">
+      </a>
+
+      <div class="right">
+        <input id="apikey" type="password" placeholder="x-api-key (optional)"/>
+        <button id="saveKey" class="btn">Save</button>
+        <a class="btn" href="/alerts-ui">🚨 Alerts</a>
+        <a class="btn" href="/docs" target="_blank" rel="noopener">📜 API</a>
+        <span class="pill" id="status">loading…</span>
+      </div>
+    </header>
+
+    <!-- KPIs -->
+    <div class="row">
+      <div class="card">
+        <div class="muted">Total processed</div>
+        <div class="kpi" id="kTotal">—</div>
+      </div>
+      <div class="card">
+        <div class="muted">Alerts ≥ threshold</div>
+        <div class="kpi" id="kAlerts">—</div>
+      </div>
+      <div class="card">
+        <div class="muted">Average risk</div>
+        <div class="kpi" id="kAvg">—</div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <!-- mini chart -->
+      <div class="card">
+        <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
+        <canvas id="chart"></canvas>
+        <div class="note">Simple canvas chart from <code>/metrics.series_by_day</code>.</div>
+      </div>
+
+      <!-- categories -->
+      <div class="card">
+        <div class="muted" style="margin-bottom:8px;">Top categories</div>
+        <div id="cats">—</div>
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <!-- recent alerts preview (server fills in via /alerts-ui) -->
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px;">Quick actions</div>
+      <div class="actions">
+        <a class="btn cta" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
+        <a class="btn" id="analyzeSample">🧪 Analyze sample</a>
+        <a class="btn" id="exportCsv">⬇️ Export CSV</a>
+      </div>
+      <div class="note" style="margin-top:8px">
+        These call your API with <code>x-api-key</code>. Save the key or add <code>?key=…</code> to the URL.
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <!-- last 10 alerts table (client fetch) -->
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px;">Recent high-risk (preview)</div>
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="5" class="muted">loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // ===== helpers: get/save key =====
+    const input  = document.getElementById('apikey');
+    const save   = document.getElementById('saveKey');
+    const status = document.getElementById('status');
+
+    function getKey(){
+      const fromQS = new URLSearchParams(location.search).get('key');
+      if (fromQS) { localStorage.setItem('cw_api_key', fromQS); return fromQS; }
+      return localStorage.getItem('cw_api_key') || '';
+    }
+    function hdrs(){
+      const k = getKey();
+      const h = { 'Content-Type':'application/json' };
+      if (k) h['x-api-key'] = k;
+      return h;
+    }
+    function setStatus(msg, ok=true){ status.textContent = msg; status.style.color = ok ? '#9aa9c6' : '#ffa0a0'; }
+
+    input.value = getKey();
+    save.onclick = ()=>{ localStorage.setItem('cw_api_key', (input.value||'').trim()); setStatus('key saved'); load(); };
+
+    // ===== UI handles =====
+    const kTotal  = document.getElementById('kTotal');
+    const kAlerts = document.getElementById('kAlerts');
+    const kAvg    = document.getElementById('kAvg');
+    const catsDiv = document.getElementById('cats');
+    const tbody   = document.getElementById('tbody');
+    const chartEl = document.getElementById('chart');
+
+    // ===== simple line chart (no libs) =====
+    function drawChart(points){
+      const ctx = chartEl.getContext('2d');
+      const w = chartEl.width = chartEl.clientWidth * (window.devicePixelRatio||1);
+      const h = chartEl.height = 220 * (window.devicePixelRatio||1);
+      ctx.clearRect(0,0,w,h);
+
+      if (!points.length){ ctx.fillStyle='#9aa9c6'; ctx.fillText('No data', 10, 20); return; }
+
+      const xs = points.map((p,i)=>i);
+      const ys = points.map(p=>p.avg_risk);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const pad = 16;
+      const scaleX = (w-2*pad)/(xs.length-1 || 1);
+      const scaleY = (h-2*pad)/((maxY-minY) || 1);
+
+      ctx.strokeStyle = 'rgba(199,210,255,.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      xs.forEach((x,i)=>{
+        const px = pad + i*scaleX;
+        const py = h-pad - (ys[i]-minY)*scaleY;
+        i ? ctx.lineTo(px,py) : ctx.moveTo(px,py);
+      });
+      ctx.stroke();
+
+      // dots
+      ctx.fillStyle = 'rgba(255,255,255,.85)';
+      xs.forEach((x,i)=>{
+        const px = pad + i*scaleX;
+        const py = h-pad - (ys[i]-minY)*scaleY;
+        ctx.beginPath(); ctx.arc(px,py,3,0,Math.PI*2); ctx.fill();
+      });
+    }
+
+    // ===== data loaders =====
+    async function loadMetrics(){
+      const r = await fetch('/metrics', { headers: hdrs() });
+      if (!r.ok){ setStatus('metrics: unauthorized', false); throw new Error('metrics unauthorized'); }
+      const j = await r.json();
+      kTotal.textContent  = j.total;
+      kAlerts.textContent = j.alerts;
+      kAvg.textContent    = j.avg_risk.toFixed(3);
+
+      // categories
+      const cats = Object.entries(j.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
+      catsDiv.innerHTML = cats.length
+        ? cats.map(([k,v])=>`<span class="tag">${k} · ${v}</span>`).join(' ')
+        : '<span class="muted">none</span>';
+
+      drawChart(j.series_by_day || []);
+      setStatus('ok');
+    }
+
+    async function loadAlertsPreview(){
+      try{
+        const r = await fetch('/alerts?limit=50', { headers: hdrs() });
+        if (!r.ok){ tbody.innerHTML = `<tr><td colspan="5" class="muted">Unauthorized for alerts preview</td></tr>`; return; }
+        const j = await r.json();
+        const items = (j.items||[]).slice(0,10);
+        if (!items.length){
+          tbody.innerHTML = `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = items.map(it=>{
+          const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+          const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+          const amt= `${it.amount} ${(it.symbol||'')}`;
+          const cat= it.category || 'unknown';
+          const risk = Number(it.risk_score||0).toFixed(3);
+          const cls  = (it.risk_score||0) >= 0.75 ? 'warn' : 'ok';
+          return `<tr>
+            <td>${t}</td>
+            <td>${ft}</td>
+            <td>${amt}</td>
+            <td><span class="tag">${cat}</span></td>
+            <td class="${cls}">${risk}</td>
+          </tr>`;
+        }).join('');
+      }catch(e){
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">Couldn’t load alerts preview</td></tr>`;
+      }
+    }
+
+    // quick actions
+    document.getElementById('fetchXRPL').onclick = async ()=>{
+      const k = getKey();
+      if (!k) { alert('Save your x-api-key first'); return; }
+      const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
+      if (!acct) return;
+      const url = `/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
+      const r = await fetch(url, { method:'POST', headers: hdrs() });
+      alert(r.ok ? 'Fetched & saved' : 'Failed (check server logs)');
+      loadMetrics(); loadAlertsPreview();
+    };
+
+    document.getElementById('analyzeSample').onclick = async ()=>{
+      const r = await fetch('/analyze/sample', { method:'POST', headers: hdrs() });
+      alert(r.ok ? 'Sample analyzed' : 'Failed (check server logs)');
+      loadMetrics(); loadAlertsPreview();
+    };
+
+    document.getElementById('exportCsv').onclick = ()=>{
+      const k = getKey();
+      const url = k ? `/export/csv/download?key=${encodeURIComponent(k)}` : '/export/csv/download';
+      window.open(url, '_blank');
+    };
+
+    async function load(){ await loadMetrics(); await loadAlertsPreview(); }
+    // === live refresh ===
+    load();
+    setInterval(load, 15000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+
+    // === animated background script (added) ===
+    (function(){
+      const bg = document.getElementById('bg');
+      if(!bg) return;
+      const ctx = bg.getContext('2d');
+      let W,H,DPR=Math.min(window.devicePixelRatio||1,2), P=[];
+      const rnd=n=>Math.random();
+
+      function resize(){
+        W=bg.width = Math.floor(innerWidth*DPR);
+        H=bg.height= Math.floor(innerHeight*DPR);
+        bg.style.width = innerWidth+'px';
+        bg.style.height= innerHeight+'px';
+        const n=Math.floor((W*H)/(90_000*DPR));
+        P = Array.from({length:n},()=>({
+          x:rnd()*W, y:rnd()*H,
+          vx:(rnd()-.5)*.35*DPR,
+          vy:(rnd()-.5)*.35*DPR
+        }));
+      }
+
+      function step(){
+        ctx.clearRect(0,0,W,H);
+        const g=ctx.createLinearGradient(0,0,W,H);
+        g.addColorStop(0,'rgba(123,108,255,.10)');
+        g.addColorStop(.5,'rgba(0,225,255,.08)');
+        g.addColorStop(1,'rgba(255,255,255,.05)');
+        ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+        ctx.fillStyle='rgba(255,255,255,.45)';
+        for(const p of P){
+          p.x+=p.vx; p.y+=p.vy;
+          if(p.x<0||p.x>W) p.vx*=-1;
+          if(p.y<0||p.y>H) p.vy*=-1;
+          ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill();
+        }
+
+        ctx.strokeStyle='rgba(200,220,255,.11)';
+        for(let i=0;i<P.length;i++){
+          const a=P[i];
+          for(let j=i+1;j<P.length;j++){
+            const b=P[j],dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;
+            if(d2<18000*DPR){
+              ctx.globalAlpha=1-d2/(18000*DPR);
+              ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+            }
+          }
+        }
+        ctx.globalAlpha=1;
+        requestAnimationFrame(step);
+      }
+
+      resize(); requestAnimationFrame(step);
+      addEventListener('resize', resize);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Klerno Labs — AML Risk Intelligence & Compliance Automation</title>
+
+  <!-- Basic SEO -->
+  <meta name="description" content="Klerno Labs builds AML risk intelligence for XRPL & beyond: real-time transaction tagging, risk scoring, alerts, and explainable insights."/>
+  <meta name="keywords" content="Klerno Labs, AML, compliance, risk intelligence, XRPL, crypto monitoring, transaction screening"/>
+  <meta property="og:title" content="Klerno Labs — AML Risk Intelligence"/>
+  <meta property="og:description" content="Real-time tagging, risk scoring, alerts, and explainable insights for XRPL & beyond."/>
+  <meta property="og:type" content="website"/>
+
+  <style>
+    :root{
+      --bg:#060913; --ink:#eaf0ff; --muted:#9fb0d3;
+      --accent:#7b6cff; --accent-2:#00e1ff;
+      --glass:rgba(255,255,255,0.06); --stroke:rgba(255,255,255,0.12);
+      --glass-light:rgba(255,255,255,0.10);
+      --blur:14px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{ margin:0; font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Apple Color Emoji","Segoe UI Emoji"; color:var(--ink); background:var(--bg); overflow-x:hidden }
+
+    /* animated background */
+    canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
+    .vignette{position:fixed; inset:0; z-index:1; pointer-events:none; background:radial-gradient(1200px 600px at 70% 20%,transparent 0%,rgba(0,0,0,.35) 70%,rgba(0,0,0,.7) 100%); mix-blend-mode:multiply}
+
+    /* layout stack */
+    .wrap{position:relative; z-index:2; min-height:100%; display:grid; place-items:start center; padding:28px}
+    .stack{width:100%; max-width:1100px; display:grid; gap:22px}
+
+    /* shared card */
+    .card{ background:var(--glass); border:1px solid var(--stroke); border-radius:20px; backdrop-filter:blur(var(--blur)); -webkit-backdrop-filter:blur(var(--blur)); padding:32px; box-shadow:0 10px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05) }
+
+    /* BRAND CARD – image only */
+    .brand-card{ padding:28px; display:grid; justify-items:center; background:linear-gradient(180deg, var(--glass-light), var(--glass) 60%) }
+    .brand-wordmark{ max-width:min(450px,50%); height:auto; display:block; filter:drop-shadow(0 8px 24px rgba(142,197,255,.25)) }
+
+    /* HERO */
+    .hero h1{ margin:6px 0 8px; font-size:clamp(30px,4.4vw,56px); line-height:1.05; letter-spacing:-.02em }
+    .grad{background:linear-gradient(90deg,#c7d2ff,#a7f3ff 40%,#c7b8ff 80%); -webkit-background-clip:text; background-clip:text; color:transparent}
+    p.lead{margin:10px 0 18px; color:var(--muted); font-size:clamp(16px,2.1vw,19px); line-height:1.5}
+    .cta-row{display:flex; justify-content:center; margin-top:16px}
+    .btn{ display:inline-flex; align-items:center; gap:10px; padding:16px 24px; border-radius:14px; border:1px solid var(--stroke); background:rgba(255,255,255,.06); color:var(--ink); text-decoration:none; transition:transform .12s ease, background .12s ease, border-color .12s ease, box-shadow .12s ease; cursor:pointer; font-weight:800; font-size:18px }
+    .btn:hover{transform:translateY(-1px); border-color:rgba(255,255,255,.28)}
+    .btn.primary{background:linear-gradient(90deg,var(--accent),var(--accent-2)); border-color:transparent; color:#020617}
+    .btn.primary.glow{ animation:pulseGlow 2.5s infinite ease-in-out }
+    @keyframes pulseGlow{0%,100%{box-shadow:0 0 0 rgba(123,108,255,0)}50%{box-shadow:0 0 22px rgba(123,108,255,.6)}}
+
+    /* INFO PANEL */
+    .info h2{margin:0 0 10px; font-size:clamp(22px,3.2vw,32px); letter-spacing:-.01em}
+    .info p{ color:var(--muted); font-size:clamp(14px,1.7vw,17px); line-height:1.65; margin:0 0 16px }
+    .feature-list{ display:grid; gap:10px; margin:8px 0 18px }
+    .feature{ display:flex; gap:10px; align-items:flex-start }
+    .dot{ width:10px; height:10px; border-radius:50%; background:linear-gradient(90deg,var(--accent),var(--accent-2)); margin-top:7px; box-shadow:0 0 16px rgba(123,108,255,.5)}
+
+    /* PREVIEW GRID */
+    .gallery{ display:grid; gap:12px; grid-template-columns:repeat(3,1fr); margin-top:6px }
+    @media (max-width:720px){ .gallery{ grid-template-columns:1fr 1fr } }
+
+    .preview-card{ position:relative; border-radius:14px; border:1px solid var(--stroke); background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.04)); overflow:hidden; min-height:180px }
+    .preview-empty{ position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:14px; padding:12px; text-align:center }
+    .preview-cta{ position:absolute; inset:auto 10px 10px auto; padding:8px 12px; border-radius:10px; background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#020617; font-weight:700; font-size:12px; border:0; cursor:pointer; text-decoration:none; box-shadow:0 6px 20px rgba(0,0,0,.35) }
+    .preview-label{ position:absolute; left:12px; bottom:10px; color:var(--muted); font-size:12px; opacity:.9; backdrop-filter:blur(6px) }
+    .preview-card:hover .preview-cta{ filter:brightness(1.05) }
+
+    /* iframe previews (tile 2 & 3) */
+    .preview-frame{ width:100%; height:100%; border:0; display:block; pointer-events:none; background:transparent }
+
+    /* graph canvas (tile 1) */
+    .mini-chart{ width:100%; height:100%; display:block }
+    footer{ position:fixed; right:20px; bottom:10px; z-index:2; display:flex; justify-content:flex-end; align-items:center; color:var(--muted); font-size:12px; opacity:.8 }
+  </style>
+</head>
+<body>
+  <canvas id="bg" aria-hidden="true"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <main class="stack" role="main">
+      <!-- Brand card: IMAGE ONLY -->
+      <section class="card brand-card">
+        <img class="brand-wordmark" src="/static/klerno-wordmark.png" alt="Klerno Labs wordmark" width="900" height="180" loading="eager" decoding="async"/>
+      </section>
+
+      <!-- Hero -->
+      <section class="card hero" aria-labelledby="heroTitle">
+        <h1 id="heroTitle"><span class="grad">AML Risk Intelligence</span> for XRPL &amp; beyond</h1>
+        <p class="lead">Real-time transaction tagging, risk scoring, alerts, and explainable insights. Designed for compliance teams that want speed, clarity, and confidence.</p>
+        <div class="cta-row">
+          <a id="getApp" class="btn primary glow" href="/paywall" aria-label="Get the Klerno Labs app">🚀 Get the app</a>
+        </div>
+      </section>
+
+      <!-- Info / conversion panel -->
+      <section class="card info" aria-labelledby="infoTitle">
+        <h2 id="infoTitle">Clarity at the speed of crypto.</h2>
+        <p>Klerno Labs gives you a live, explainable view of on-chain activity—so you can move fast without missing red flags. No black boxes, no guesswork: just precise risk signals and crisp context your team can trust.</p>
+
+        <div class="feature-list" role="list">
+          <div class="feature" role="listitem"><span class="dot"></span><p><strong>Real-time tagging &amp; scoring</strong> across XRPL (and more soon), tuned for compliance operations.</p></div>
+          <div class="feature" role="listitem"><span class="dot"></span><p><strong>Alerts with explanations</strong> so investigators get “why” at a glance, not just a number.</p></div>
+          <div class="feature" role="listitem"><span class="dot"></span><p><strong>Leadership-ready summaries</strong> that compress days of activity into a page of signal.</p></div>
+        </div>
+
+        <!-- LIVE previews -->
+        <div class="gallery" aria-label="Preview gallery">
+          <!-- 1) GRAPH from /metrics -->
+          <div class="preview-card" id="prev-graph">
+            <canvas id="metricsChart" class="mini-chart"></canvas>
+            <div class="preview-empty">Save your API key to render a live risk trend.</div>
+            <a class="preview-cta" id="graphOpen" target="_blank" rel="noopener" href="/dashboard">Open</a>
+            <div class="preview-label">Avg risk (sparkline)</div>
+          </div>
+
+          <!-- 2) Risk drill-down (iframe) -->
+          <div class="preview-card" data-target="/dashboard#risks" id="prev-risk">
+            <iframe class="preview-frame" title="Risk drill-down preview" sandbox="allow-same-origin allow-scripts"></iframe>
+            <div class="preview-empty">Live risk view loads after your API key is set.</div>
+            <a class="preview-cta" target="_blank" rel="noopener">Open</a>
+            <div class="preview-label">Risk drill-down</div>
+          </div>
+
+          <!-- 3) Alerts (iframe) -->
+          <div class="preview-card" data-target="/alerts-ui" id="prev-alerts">
+            <iframe class="preview-frame" title="Alerts preview" sandbox="allow-same-origin allow-scripts"></iframe>
+            <div class="preview-empty">Alerts preview requires your API key.</div>
+            <a class="preview-cta" target="_blank" rel="noopener">Open</a>
+            <div class="preview-label">Alert details</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>© <span id="yr"></span> Klerno Labs — All rights reserved</footer>
+
+  <script>
+    // particles background (unchanged)
+    const c = document.getElementById('bg'), ctx = c.getContext('2d');
+    let W,H,DPR=Math.min(window.devicePixelRatio||1,2), P=[];
+    const rnd=n=>Math.random()*n;
+    function resize(){ W=c.width=Math.floor(innerWidth*DPR); H=c.height=Math.floor(innerHeight*DPR); c.style.width=innerWidth+'px'; c.style.height=innerHeight+'px'; const n=Math.floor((W*H)/(90_000*DPR)); P=Array.from({length:n},()=>({x:rnd(W),y:rnd(H),vx:(rnd(1)-.5)*.35,vy:(rnd(1)-.5)*.35})) }
+    function step(){
+      ctx.clearRect(0,0,W,H);
+      const g=ctx.createLinearGradient(0,0,W,H); g.addColorStop(0,'rgba(123,108,255,.10)'); g.addColorStop(.5,'rgba(0,225,255,.08)'); g.addColorStop(1,'rgba(255,255,255,.05)');
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='rgba(255,255,255,.45)';
+      for(const p of P){ p.x+=p.vx; p.y+=p.vy; if(p.x<0||p.x>W)p.vx*=-1; if(p.y<0||p.y>H)p.vy*=-1; ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill() }
+      ctx.strokeStyle='rgba(200,220,255,.11)';
+      for(let i=0;i<P.length;i++){ const a=P[i]; for(let j=i+1;j<P.length;j++){ const b=P[j],dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy; if(d2<18000*DPR){ ctx.globalAlpha=1-d2/(18000*DPR); ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke() } } }
+      ctx.globalAlpha=1; requestAnimationFrame(step);
+    }
+    resize(); requestAnimationFrame(step); addEventListener('resize', resize);
+    document.getElementById('yr').textContent = new Date().getFullYear();
+
+    // ===== Live preview wiring =====
+    (function(){
+      const key = (localStorage.getItem('cw_api_key') || '').trim();
+
+      // Iframes (cards 2 & 3)
+      document.querySelectorAll('.preview-card[data-target]').forEach(card => {
+        const frame = card.querySelector('.preview-frame');
+        const empty = card.querySelector('.preview-empty');
+        const cta   = card.querySelector('.preview-cta');
+        const base  = card.getAttribute('data-target') || '/';
+
+        if (key) {
+          const url = new URL(base, window.location.origin);
+          url.searchParams.set('key', key);
+          frame.src = url.toString();
+          empty.style.display = 'none';
+          cta.href = url.toString();
+          cta.textContent = 'Open';
+        } else {
+          frame.removeAttribute('src');
+          empty.style.display = 'grid';
+          cta.href = '/paywall';
+          cta.textContent = 'Add key';
+        }
+      });
+
+      // Chart (card 1)
+      const chartCard = document.getElementById('prev-graph');
+      const empty = chartCard.querySelector('.preview-empty');
+      const canvas = document.getElementById('metricsChart');
+      const openBtn = document.getElementById('graphOpen');
+
+      if (!key) {
+        openBtn.href = '/paywall';
+        openBtn.textContent = 'Add key';
+        return;
+      }
+
+      // Fetch /metrics using x-api-key header
+      fetch('/metrics', { headers: { 'x-api-key': key } })
+        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then(data => {
+          empty.style.display = 'none';
+          openBtn.href = new URL('/dashboard', window.location.origin).toString() + `?key=${encodeURIComponent(key)}`;
+          openBtn.textContent = 'Open';
+
+          const series = (data.series_by_day || []).slice(-30); // last ~30 points
+          drawSparkline(canvas, series.map(d => ({ x: new Date(d.date), y: +d.avg_risk || 0 })));
+        })
+        .catch(() => {
+          empty.textContent = 'Could not load metrics (check API key).';
+          openBtn.href = '/paywall';
+          openBtn.textContent = 'Fix key';
+        });
+
+      function drawSparkline(cv, pts){
+        const dpr = Math.min(window.devicePixelRatio||1,2);
+        const w = chartCard.clientWidth, h = chartCard.clientHeight;
+        cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
+        cv.style.width = w+'px'; cv.style.height = h+'px';
+        const ctx = cv.getContext('2d');
+        ctx.scale(dpr,dpr);
+
+        // padding
+        const pad = 16, top=14, bottom=24;
+        const innerW = w - pad*2, innerH = h - top - bottom;
+        if (!pts.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data', w/2-20, h/2); return; }
+
+        const xs = pts.map(p=>p.x.getTime());
+        const ys = pts.map(p=>p.y);
+        const minX = Math.min(...xs), maxX = Math.max(...xs);
+        const minY = Math.min(...ys, 0), maxY = Math.max(...ys, 1);
+
+        const xScale = t => pad + ( (t-minX)/(maxX-minX || 1) ) * innerW;
+        const yScale = v => top + innerH - ((v-minY)/(maxY-minY || 1)) * innerH;
+
+        // gradient fill
+        const grad = ctx.createLinearGradient(0, top, 0, top+innerH);
+        grad.addColorStop(0, 'rgba(123,108,255,.45)');
+        grad.addColorStop(1, 'rgba(123,108,255,0)');
+        ctx.beginPath();
+        ctx.moveTo(xScale(xs[0]), yScale(ys[0]));
+        for (let i=1;i<pts.length;i++) ctx.lineTo(xScale(xs[i]), yScale(ys[i]));
+        ctx.lineTo(xScale(xs[pts.length-1]), top+innerH);
+        ctx.lineTo(xScale(xs[0]), top+innerH);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // line
+        ctx.beginPath();
+        ctx.moveTo(xScale(xs[0]), yScale(ys[0]));
+        for (let i=1;i<pts.length;i++) ctx.lineTo(xScale(xs[i]), yScale(ys[i]));
+        ctx.strokeStyle = 'rgba(160,200,255,.9)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // last point dot
+        const lx = xScale(xs[pts.length-1]), ly = yScale(ys[pts.length-1]);
+        ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI*2); ctx.fillStyle='#a7f3ff'; ctx.fill();
+      }
+    })();
+  </script>
+</body>
+</html>

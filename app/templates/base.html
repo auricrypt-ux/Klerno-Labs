@@ -2,37 +2,76 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{ title or "Custowell Copilot" }}</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1"
+  />
+  <title>{{ title or "Klerno Labs" }}</title>
+
+  <!-- Tailwind via CDN (no build step) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js for sparkline/line charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background:#0b1020; color:#e8ecf3;}
-    header { padding:16px 24px; background:#121a34; border-bottom:1px solid #1e2a52; display:flex; gap:16px; align-items:center; }
-    a { color:#9bc7ff; text-decoration:none; }
-    a:hover { text-decoration:underline; }
-    .wrap { padding:24px; max-width:1200px; margin:0 auto; }
-    .cards { display:grid; grid-template-columns: repeat(4, minmax(160px,1fr)); gap:16px; }
-    .card { background:#121a34; border:1px solid #1e2a52; border-radius:12px; padding:16px; }
-    .k { font-size:12px; color:#9aa9c6; text-transform:uppercase; letter-spacing:.08em;}
-    .v { font-size:28px; font-weight:700; margin-top:4px;}
-    table { width:100%; border-collapse:collapse; margin-top:16px; }
-    th, td { padding:10px 8px; text-align:left; border-bottom:1px solid #1e2a52; font-size:14px;}
-    th { color:#9aa9c6; font-weight:600; }
-    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#1b2547; border:1px solid #2a3a72;}
-    nav a { margin-right:16px; }
-    .muted { color:#9aa9c6; }
+    :root {
+      --bg: #0b1020;
+      --panel: #121a34;
+      --line: #1e2a52;
+      --ink: #e8ecf3;
+      --muted: #9aa9c6;
+      --brand: #6c63ff;
+      --danger: #ff5577;
+      --ok: #10b981;
+      --warn: #f59e0b;
+    }
+    body { background: var(--bg); color: var(--ink); }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+    .chip { border: 1px solid var(--line); background: rgba(255,255,255,0.03); }
+    .pill { background: rgba(255,255,255,0.06); }
   </style>
 </head>
-<body>
-  <header>
-    <strong>Custowell Copilot</strong>
-    <nav>
-      <a href="{{ url_path_for('ui_dashboard') }}?key={{ key }}">Dashboard</a>
-      <a href="{{ url_path_for('ui_alerts') }}?key={{ key }}">Alerts</a>
-      <a href="/docs" target="_blank" class="muted">API Docs</a>
-    </nav>
+<body class="min-h-screen">
+  <header class="border-b border-[var(--line)]">
+    <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+      <a href="{{ url_path_for('ui_dashboard') }}" class="text-xl font-semibold hover:opacity-90">Klerno Labs</a>
+      <nav class="flex items-center gap-2">
+        <a id="nav-dashboard" class="px-3 py-1.5 rounded-md chip hover:opacity-90" href="{{ url_path_for('ui_dashboard') }}">Dashboard</a>
+        <a id="nav-alerts" class="px-3 py-1.5 rounded-md chip hover:opacity-90" href="{{ url_path_for('ui_alerts') }}">Alerts</a>
+        <a class="px-3 py-1.5 rounded-md chip hover:opacity-90" href="/docs" target="_blank" rel="noopener">API Docs</a>
+      </nav>
+    </div>
   </header>
-  <div class="wrap">
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
     {% block content %}{% endblock %}
-  </div>
+  </main>
+
+  <footer class="max-w-7xl mx-auto px-4 pb-8 text-sm text-[var(--muted)]">
+    <div class="flex items-center justify-between">
+      <span>© {{ (now().year if now else 2025) }} Klerno Labs — Klerno Labs</span>
+      <span class="opacity-80">XRPL-first • Risk & Alerts</span>
+    </div>
+  </footer>
+
+  <script>
+    // Carry ?key=... through internal links so UI pages remain authorized
+    (function attachKeyToLinks() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const key = params.get("key");
+        if (!key) return;
+
+        for (const a of document.querySelectorAll('a[href^="/"]')) {
+          const url = new URL(a.getAttribute("href"), window.location.origin);
+          url.searchParams.set("key", key);
+          a.setAttribute("href", url.toString());
+        }
+      } catch {}
+    })();
+  </script>
+
+  {% block scripts %}{% endblock %}
 </body>
 </html>
