@@ -20,3 +20,11 @@ requests==2.31.0
 
 # --- OpenAI (legacy SDK compatible with xrpl-py httpx pin) ---
 openai==0.28.1
+
+PyJWT==2.8.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.1
+
+# Keep these versions compatible with Windows wheels
+pandas==2.2.1
+numpy==1.26.4
