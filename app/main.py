@@ -89,9 +89,17 @@ def _dump(obj: Any) -> Dict[str, Any]:
         return {"value": obj}
 
 
-# NEW: unified reader for old/new score keys
+# NEW: unified, NaN-safe reader for old/new score keys
 def _row_score(r: Dict[str, Any]) -> float:
-    return float(r.get("score") if r.get("score") is not None else r.get("risk_score", 0) or 0)
+    try:
+        val = r.get("score", None)
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            val = r.get("risk_score", 0)
+        if isinstance(val, float) and pd.isna(val):
+            val = 0
+        return float(val or 0)
+    except Exception:
+        return 0.0
 
 
 # =========================
@@ -260,6 +268,45 @@ def logout_ui():
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie("session")
     return resp
+
+
+# ---------------------- User & Settings API ----------------------
+class SettingsPayload(BaseModel):
+    x_api_key: Optional[str] = None
+    risk_threshold: Optional[float] = None
+    time_range_days: Optional[int] = None
+    ui_prefs: Optional[Dict[str, Any]] = None
+
+
+@app.get("/me", include_in_schema=False)
+def me(user=Depends(require_user)):
+    """Basic profile for the signed-in user (used by front-end)."""
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "role": user["role"],
+        "subscription_active": bool(user.get("subscription_active")),
+    }
+
+
+@app.get("/me/settings")
+def me_settings_get(user=Depends(require_user)):
+    """Return the current user's saved settings ({} if none)."""
+    return store.get_settings_for_user(user["id"])
+
+
+@app.post("/me/settings")
+def me_settings_post(payload: SettingsPayload, user=Depends(require_user)):
+    """Merge/overwrite the user's settings with provided keys (whitelisted)."""
+    allowed = {"x_api_key", "risk_threshold", "time_range_days", "ui_prefs"}
+    patch = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k in allowed}
+    # light coercion
+    if "risk_threshold" in patch:
+        patch["risk_threshold"] = float(patch["risk_threshold"])
+    if "time_range_days" in patch:
+        patch["time_range_days"] = int(patch["time_range_days"])
+    settings = store.save_settings_for_user(user["id"], patch)
+    return {"ok": True, "settings": settings}
 
 
 # ---------------- Core API ----------------
@@ -497,8 +544,7 @@ def metrics(auth: bool = Security(enforce_api_key)):
     try:
         df = pd.DataFrame(rows)
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        # normalize to a single column used for grouping/averaging
-        df["risk_score"] = df.apply(lambda r: _row_score(r), axis=1)
+        df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
         df["day"] = df["timestamp"].dt.date
         grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
         series = [{"date": str(d), "avg_risk": round(float(v), 3)} for d, v in zip(grp["day"], grp["avg_risk"])]
