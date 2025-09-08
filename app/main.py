@@ -48,6 +48,7 @@ from . import auth as auth_router
 from . import paywall_hooks as paywall_hooks
 from .deps import require_paid_or_admin, require_user
 from .routes.analyze_tags import router as analyze_tags_router
+from .admin import router as admin_router  # <-- admin dashboard
 
 # ---------- Optional LLM helpers ----------
 try:
@@ -129,6 +130,7 @@ app.include_router(paywall.router)
 app.include_router(auth_router.router)
 app.include_router(paywall_hooks.router)
 app.include_router(analyze_tags_router)
+app.include_router(admin_router)  # <-- register admin routes
 
 # Init DB
 store.init_db()
@@ -349,9 +351,6 @@ def logout_ui():
 
 
 # --- User & Settings API (aligned with store.get_settings/save_settings) ---
-from typing import Optional, Dict, Any
-from pydantic import BaseModel
-
 class SettingsPayload(BaseModel):
     x_api_key: Optional[str] = None
     risk_threshold: Optional[float] = None

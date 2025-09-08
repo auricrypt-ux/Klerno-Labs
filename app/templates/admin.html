@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Klerno Admin</title>
+  <style>
+    :root{
+      --bg:#070a16; --panel:#0e1530; --line:#1b2750; --ink:#eaf0ff;
+      --muted:#9fb0d6; --cta:#6c63ff; --good:#22d3a6; --warn:#f59e0b; --bad:#ef4444;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial; background:radial-gradient(1200px 600px at 70% 10%, rgba(108,99,255,.08), transparent 60%), var(--bg); color:var(--ink)}
+    a{color:inherit}
+
+    .wrap{max-width:1200px; margin:28px auto; padding:0 16px}
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px}
+    .brand{display:flex; align-items:center; gap:10px; text-decoration:none}
+    .brand img{height:28px; filter:drop-shadow(0 2px 12px rgba(108,99,255,.35))}
+    .badge{padding:6px 10px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:12px}
+    .btn{display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:12px; border:1px solid var(--line); background:#111a3a; color:var(--ink); text-decoration:none; cursor:pointer}
+    .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
+    .btn.ghost{background:transparent}
+    .btn.danger{border-color:rgba(239,68,68,.45); background:#1a0f13}
+    .grid{display:grid; gap:14px}
+    .grid.cols-3{grid-template-columns:repeat(3,1fr)}
+    .grid.cols-2{grid-template-columns:repeat(2,1fr)}
+    @media (max-width:980px){ .grid.cols-3, .grid.cols-2{ grid-template-columns:1fr } }
+    .card{background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px 16px}
+    .card h3{margin:0 0 8px 0; font-size:16px; color:#cfe0ff}
+    .kpi{font-size:28px; font-weight:800; letter-spacing:-.02em}
+    .muted{color:var(--muted)}
+    table{width:100%; border-collapse:collapse; border:1px solid var(--line); border-radius:12px; overflow:hidden}
+    th,td{padding:10px 12px; border-bottom:1px solid var(--line); font-size:14px; text-align:left}
+    th{background:#0b1230; color:#cbd5f7}
+    tr:last-child td{border-bottom:none}
+    input,select{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0b1020; color:var(--ink)}
+    .row{display:flex; gap:10px; flex-wrap:wrap}
+    .pill{display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid var(--line); border-radius:999px; background:rgba(255,255,255,.06); color:var(--ink); cursor:default; font-weight:700; font-size:12px}
+    .dot{width:8px; height:8px; border-radius:50%; background:#a0a0a0; box-shadow:0 0 10px rgba(160,160,160,.5)}
+    .ok .dot{background:#22d3a6}
+    .warn .dot{background:#f59e0b}
+    .bad .dot{background:#ef4444}
+    .section-title{display:flex; align-items:center; justify-content:space-between; margin-bottom:8px}
+    .small{font-size:12px}
+    .code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .scroller{max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:12px}
+    .toastbox{position:fixed; right:16px; bottom:16px; display:grid; gap:8px; z-index:60}
+    .toast{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0b1020cc}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="/dashboard"><img src="/static/klerno-wordmark.png" alt="Klerno Labs"/></a>
+      <div class="row">
+        <a class="btn ghost" href="/dashboard">← Back to Dashboard</a>
+        <span id="pillBackend" class="pill"><span class="dot"></span><span id="pillText" class="small">checking…</span></span>
+      </div>
+    </header>
+
+    <!-- KPIs -->
+    <div class="grid cols-3">
+      <div class="card">
+        <div class="muted">Total processed</div>
+        <div id="kTotal" class="kpi">—</div>
+      </div>
+      <div class="card">
+        <div class="muted">Alerts ≥ threshold</div>
+        <div id="kAlerts" class="kpi">—</div>
+      </div>
+      <div class="card">
+        <div class="muted">Average risk</div>
+        <div id="kAvg" class="kpi">—</div>
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <div class="grid cols-2">
+      <!-- Live feed -->
+      <div class="card">
+        <div class="section-title">
+          <h3>Live activity</h3>
+          <div class="row">
+            <input id="watch" placeholder="watch wallets (comma-separated)" />
+            <button id="btnWatch" class="btn">Apply</button>
+          </div>
+        </div>
+        <div id="liveList" class="scroller small"></div>
+        <div class="small muted">Streaming from <span class="code">/ws/alerts</span>. Applies to saved/ingested txs.</div>
+      </div>
+
+      <!-- Tools -->
+      <div class="card">
+        <div class="section-title"><h3>Tools</h3></div>
+        <div class="row">
+          <button id="btnSeed" class="btn">✨ Load demo data</button>
+          <button id="btnExport" class="btn">⬇️ Export CSV</button>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <input id="emailTo" type="email" placeholder="test email to (optional)"/>
+          <button id="btnEmail" class="btn">✉️ Send test email</button>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <input id="xrplAcct" placeholder="XRPL account to ping"/>
+          <button id="btnXRPL" class="btn">🔌 XRPL ping</button>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <input id="purgeConfirm" placeholder='Type "DELETE" to purge data'/>
+          <button id="btnPurge" class="btn danger">🧨 Purge TX data</button>
+        </div>
+        <div class="small muted">Admin-only operations. Be careful with purge.</div>
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <!-- Users -->
+    <div class="card">
+      <div class="section-title">
+        <h3>Users</h3>
+        <span class="muted small">Manage roles & subscriptions</span>
+      </div>
+      <div class="scroller">
+        <table id="tblUsers">
+          <thead>
+            <tr>
+              <th>ID</th><th>Email</th><th>Role</th><th>Subscription</th><th>Created</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersBody"><tr><td colspan="6" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toastbox" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+  (function(){
+    const $ = s => document.querySelector(s);
+    const pill = $('#pillBackend');
+    const pillText = $('#pillText');
+    const kTotal = $('#kTotal'), kAlerts = $('#kAlerts'), kAvg = $('#kAvg');
+    const usersBody = $('#usersBody');
+    const liveList = $('#liveList');
+    const toasts = $('#toasts');
+
+    function toast(msg){
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.textContent = msg;
+      toasts.appendChild(el);
+      setTimeout(()=>el.remove(), 2500);
+    }
+
+    async function loadStats(){
+      const r = await fetch('/admin/api/stats', {credentials:'include'});
+      const j = await r.json();
+      if(!r.ok){ pill.classList.add('bad'); pillText.textContent = 'error'; return; }
+      pill.classList.add('ok');
+      pillText.textContent = (j.backend || 'db') + (j.db_path ? ' • ' + j.db_path.split('/').slice(-2).join('/') : '');
+      kTotal.textContent = Intl.NumberFormat().format(j.total || 0);
+      kAlerts.textContent = Intl.NumberFormat().format(j.alerts || 0);
+      kAvg.textContent = (j.avg_risk || 0).toFixed(3);
+    }
+
+    async function loadUsers(){
+      const r = await fetch('/admin/api/users', {credentials:'include'});
+      const j = await r.json();
+      if(!r.ok){ usersBody.innerHTML = `<tr><td colspan="6" class="muted">Error</td></tr>`; return; }
+      const rows = (j.items||[]).map(u=>{
+        const sub = u.subscription_active ? 'Active' : 'Inactive';
+        return `<tr data-id="${u.id}">
+          <td>${u.id}</td>
+          <td>${u.email}</td>
+          <td>
+            <select class="roleSel">
+              <option value="viewer" ${u.role==='viewer'?'selected':''}>viewer</option>
+              <option value="analyst" ${u.role==='analyst'?'selected':''}>analyst</option>
+              <option value="admin" ${u.role==='admin'?'selected':''}>admin</option>
+            </select>
+          </td>
+          <td>
+            <select class="subSel">
+              <option value="1" ${u.subscription_active?'selected':''}>active</option>
+              <option value="0" ${!u.subscription_active?'selected':''}>inactive</option>
+            </select>
+          </td>
+          <td class="small">${(u.created_at||'').toString().replace('T',' ').slice(0,19)}</td>
+          <td><button class="btn smallBtn">Save</button></td>
+        </tr>`;
+      }).join('');
+      usersBody.innerHTML = rows || `<tr><td colspan="6" class="muted">No users</td></tr>`;
+
+      usersBody.querySelectorAll('.smallBtn').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const tr = btn.closest('tr');
+          const id = tr.getAttribute('data-id');
+          const role = tr.querySelector('.roleSel').value;
+          const active = tr.querySelector('.subSel').value === '1';
+
+          const r1 = await fetch(`/admin/api/users/${id}/role`, {
+            method:'POST', credentials:'include',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({role})
+          });
+          const r2 = await fetch(`/admin/api/users/${id}/subscription`, {
+            method:'POST', credentials:'include',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({active})
+          });
+          toast((r1.ok && r2.ok) ? 'Saved ✓' : 'Save failed');
+        });
+      });
+    }
+
+    // Tools
+    $('#btnSeed').addEventListener('click', async ()=>{
+      const r = await fetch('/admin/api/data/seed_demo', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+      const j = await r.json();
+      toast(r.ok ? `Loaded ${j.saved||0} rows ✓` : 'Failed to load demo');
+      loadStats();
+    });
+    $('#btnExport').addEventListener('click', ()=>{
+      window.open('/export/csv/download', '_blank');
+    });
+    $('#btnEmail').addEventListener('click', async ()=>{
+      const email = ($('#emailTo').value||'').trim();
+      const r = await fetch('/admin/api/email/test', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
+      const j = await r.json();
+      toast(j.ok ? 'Email sent ✓' : 'Email failed');
+    });
+    $('#btnXRPL').addEventListener('click', async ()=>{
+      const acct = ($('#xrplAcct').value||'').trim();
+      if(!acct){ toast('Enter account'); return; }
+      const r = await fetch('/admin/api/xrpl/ping', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({account:acct, limit:1})});
+      const j = await r.json();
+      toast(j.ok ? `Fetched ${j.fetched||0}` : 'Ping failed');
+    });
+    $('#btnPurge').addEventListener('click', async ()=>{
+      const c = ($('#purgeConfirm').value||'').trim();
+      if(c !== 'DELETE'){ toast('Type DELETE to confirm'); return; }
+      const r = await fetch('/admin/api/data/purge', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:c})});
+      toast(r.ok ? 'Purged ✓' : 'Purge failed');
+      loadStats();
+    });
+
+    // Live feed (WebSocket)
+    let ws;
+    function connectWS(){
+      try{
+        ws = new WebSocket((location.protocol==='https:'?'wss':'ws') + '://' + location.host + '/ws/alerts');
+        ws.onopen = ()=> { /* ready */ };
+        ws.onmessage = (ev)=>{
+          try{
+            const msg = JSON.parse(ev.data);
+            if(msg.type === 'tx'){
+              const it = msg.item || {};
+              const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+              const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+              const who= `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+              const risk = Number(it.risk_score ?? it.score ?? 0).toFixed(3);
+              const div = document.createElement('div');
+              div.style.padding='8px 10px'; div.style.borderBottom='1px solid var(--line)';
+              div.innerHTML = `<span class="small muted">${t}</span> · <strong>${risk}</strong> · ${who} · ${amt} · <span class="small">${it.category||'unknown'}</span>`;
+              liveList.prepend(div);
+              while(liveList.children.length > 80){ liveList.removeChild(liveList.lastChild); }
+            }
+          }catch(e){}
+        };
+        ws.onclose = ()=> setTimeout(connectWS, 1200);
+      }catch(e){
+        setTimeout(connectWS, 2000);
+      }
+    }
+    connectWS();
+
+    $('#btnWatch').addEventListener('click', ()=>{
+      const v = ($('#watch').value||'').split(',').map(s=>s.trim()).filter(Boolean);
+      if(ws && ws.readyState===1){ ws.send(JSON.stringify({watch:v})); toast('Watch applied'); }
+    });
+
+    // boot
+    (async function(){
+      await loadStats();
+      await loadUsers();
+      setInterval(loadStats, 15000);
+    })();
+  })();
+  </script>
+</body>
+</html>
