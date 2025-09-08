@@ -1,564 +1,817 @@
-<!doctype html> 
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Klerno Labs — Dashboard</title>
-  <style>
-    :root{
-      --bg:#0b1020; --panel:#111831; --line:#1e2a52; --ink:#e8ecf3;
-      --muted:#9aa9c6; --cta:#6c63ff; --good:#2ecc71; --warn:#ffa940;
-    }
-    *{box-sizing:border-box}
-    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-         background:var(--bg); color:var(--ink)}
+# app/main.py
+from __future__ import annotations
 
-    /* animated background */
-    canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
-    .vignette{
-      position:fixed; inset:0; z-index:1; pointer-events:none;
-      background:radial-gradient(1200px 600px at 70% 20%,transparent 0%,rgba(0,0,0,.35) 70%,rgba(0,0,0,.7) 100%);
-      mix-blend-mode:multiply;
-    }
+from datetime import datetime, timedelta
+from io import StringIO
+from typing import List, Dict, Any, Optional
 
-    .wrap{max-width:1100px; margin:32px auto; padding:0 16px; position:relative; z-index:2}
-    header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px}
+import os
+import pandas as pd
+from dataclasses import asdict, is_dataclass, fields as dc_fields
 
-    /* brand */
-    .brand{display:flex; align-items:center; gap:10px; text-decoration:none}
-    .brand .wordmark{
-      height:28px; display:block;
-      filter:drop-shadow(0 2px 10px rgba(108,99,255,.25));
-      transition:transform .12s ease, filter .2s ease;
-    }
-    @media (min-width:900px){ .brand .wordmark{ height:32px } }
-    .brand:hover .wordmark{ transform:translateY(-1px); filter:drop-shadow(0 4px 16px rgba(108,99,255,.35)) }
+from fastapi import (
+    FastAPI,
+    Security,
+    Header,
+    Request,
+    Body,
+    HTTPException,
+    Depends,
+    Form,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import (
+    StreamingResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, EmailStr
 
-    .row{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0}
-    @media (max-width:920px){ .row{grid-template-columns:1fr} }
-    .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px}
-    .kpi{font-size:28px; font-weight:700; letter-spacing:-.02em}
-    .muted{color:var(--muted)}
-    .actions{display:flex; gap:10px; flex-wrap:wrap}
-    .btn{display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:#151e3c; color:var(--ink); text-decoration:none; cursor:pointer}
-    .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
-    .grid2{display:grid; grid-template-columns:2fr 1fr; gap:14px}
-    @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
-    canvas{width:100%; height:220px; display:block}
-    table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden}
-    th,td{padding:10px 12px; border-bottom:1px solid var(--line); font-size:14px}
-    th{background:#0f1630; text-align:left; color:#cbd5f7}
-    tr:last-child td{border-bottom:none}
-    .tag{padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#cfe1ff}
-    .ok{color:var(--good)}
-    .warn{color:var(--warn)}
-    .note{font-size:12px; color:var(--muted)}
-    .right{display:flex; align-items:center; gap:10px}
+# NEW: for live push hub
+import asyncio, json
 
-    /* status pill */
-    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);
-      border-radius:999px;background:rgba(255,255,255,.06);color:var(--ink);cursor:pointer;font-weight:700;font-size:12px}
-    .pill .dot{width:8px;height:8px;border-radius:50%;background:#a0a0a0;box-shadow:0 0 10px rgba(160,160,160,.5)}
-    .pill--connected .dot{background:#34d399}
-    .pill--connected{border-color:rgba(52,211,153,.35)}
-    .pill--disconnected{opacity:.9}
+from . import store
+from .models import Transaction, TaggedTransaction, ReportRequest
+from .guardian import score_risk
+from .compliance import tag_category
+from .reporter import csv_export, summary
+from .integrations.xrp import xrpl_json_to_transactions, fetch_account_tx
+from .security import enforce_api_key, expected_api_key
+from .security_session import hash_pw, verify_pw, issue_jwt
 
-    /* modal */
-    .modal.hidden{display:none}
-    .modal{position:fixed;inset:0;z-index:60}
-    .modal__scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(4px)}
-    .modal__card{position:relative;max-width:520px;margin:8vh auto;background:var(--panel);border:1px solid var(--line);
-      border-radius:16px;padding:0;box-shadow:0 20px 60px rgba(0,0,0,.35)}
-    .modal__hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
-    .modal__body{padding:16px 18px;display:grid;gap:14px}
-    .modal__ftr{padding:14px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
-    .modal__x{border:0;background:transparent;color:var(--ink);font-size:22px;cursor:pointer}
-    .frow{display:grid;gap:6px}
-    .frow input,.frow select{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0b1020;color:var(--ink)}
-    .grid2small{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .hint{color:var(--muted);font-size:12px}
+# Auth/Paywall routers
+from . import auth as auth_router
+from . import paywall_hooks as paywall_hooks
+from .deps import require_paid_or_admin, require_user
+from .routes.analyze_tags import router as analyze_tags_router
 
-    /* toasts */
-    .toasts{position:fixed;right:16px;bottom:16px;display:grid;gap:8px;z-index:70}
-    .toast{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.6)}
-    .toast.ok{border-color:rgba(52,211,153,.4)}
-    .toast.err{border-color:rgba(239,68,68,.5)}
-  </style>
-</head>
-<body>
-  <!-- animated background -->
-  <canvas id="bg" aria-hidden="true"></canvas>
-  <div class="vignette" aria-hidden="true"></div>
+# ---------- Optional LLM helpers ----------
+try:
+    from .llm import (
+        explain_tx,
+        explain_batch,
+        ask_to_filters,
+        explain_selection,
+        summarize_rows,
+        apply_filters as _llm_apply_filters,  # optional
+    )
+except ImportError:
+    from .llm import (
+        explain_tx,
+        explain_batch,
+        ask_to_filters,
+        explain_selection,
+        summarize_rows,
+    )
+    _llm_apply_filters = None
 
-  <div class="wrap">
-    <header>
-      <a class="brand" href="/">
-        <img class="wordmark" src="/static/klerno-wordmark.png" alt="Klerno Labs">
-      </a>
 
-      <div class="right">
-        <a class="btn" href="/alerts-ui">🚨 Alerts</a>
-        <a class="btn" href="/docs" target="_blank" rel="noopener">📜 API</a>
-        <!-- status pill (opens modal) -->
-        <button id="statusPill" class="pill pill--disconnected" type="button" aria-haspopup="dialog" aria-expanded="false">
-          <span class="dot" aria-hidden="true"></span> Not connected
-        </button>
-      </div>
-    </header>
+def _apply_filters_safe(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Fallback if llm.apply_filters isn't available."""
+    if _llm_apply_filters:
+        return _llm_apply_filters(rows, spec)
+    if not spec:
+        return rows
+    out = rows
+    for k, v in spec.items():
+        out = [r for r in out if str(r.get(k, "")).lower() == str(v).lower()]
+    return out
 
-    <!-- KPIs -->
-    <div class="row">
-      <div class="card">
-        <div class="muted">Total processed</div>
-        <div class="kpi" id="kpiTotal">—</div>
-      </div>
-      <div class="card">
-        <div class="muted">Alerts ≥ threshold</div>
-        <div class="kpi" id="kpiAlerts">—</div>
-      </div>
-      <div class="card">
-        <div class="muted">Average risk <small id="kpiAvgDelta" class="muted"></small></div>
-        <div class="kpi" id="kpiAvg">—</div>
-      </div>
-    </div>
 
-    <div class="grid2">
-      <!-- mini chart -->
-      <div class="card">
-        <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
-        <canvas id="chartRisk"></canvas>
-        <div class="note">Simple canvas chart from <code>/metrics.series_by_day</code>.</div>
-      </div>
+def _dump(obj: Any) -> Dict[str, Any]:
+    """Return a dict from either a Pydantic model or a dataclass (or mapping-like)."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if is_dataclass(obj):
+        return asdict(obj)
+    try:
+        return dict(obj)  # last-ditch
+    except Exception:
+        return {"value": obj}
 
-      <!-- categories -->
-      <div class="card">
-        <div class="muted" style="margin-bottom:8px;">Top categories</div>
-        <div id="cats">—</div>
-      </div>
-    </div>
 
-    <div style="height:14px"></div>
+# NEW: unified, NaN-safe reader for old/new score keys
+def _row_score(r: Dict[str, Any]) -> float:
+    try:
+        val = r.get("score", None)
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            val = r.get("risk_score", 0)
+        if isinstance(val, float) and pd.isna(val):
+            val = 0
+        return float(val or 0)
+    except Exception:
+        return 0.0
 
-    <!-- quick actions -->
-    <div class="card">
-      <div class="muted" style="margin-bottom:8px;">Quick actions</div>
-      <div class="actions">
-        <a class="btn" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
-        <a class="btn" id="analyzeSample">🧪 Analyze sample</a>
-        <a class="btn" id="exportCsv">⬇️ Export CSV</a>
-        <button class="btn primary" id="btnLoadDemo" type="button">✨ Load demo data</button>
-      </div>
-      <div class="note" style="margin-top:8px">
-        These call your API with <code>x-api-key</code>. Save the key once in <strong>Connect</strong>.
-      </div>
-    </div>
 
-    <div style="height:14px"></div>
+# =========================
+# FastAPI app + templates
+# =========================
+app = FastAPI(title="Klerno Labs API (MVP) — XRPL First")
 
-    <!-- recent high-risk -->
-    <div class="card">
-      <div class="muted" style="margin-bottom:8px;">Recent high-risk (preview)</div>
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th>
-          </tr>
-        </thead>
-        <tbody id="tblRecent">
-          <tr><td colspan="5" class="muted">loading…</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+# Static & templates
+BASE_DIR = os.path.dirname(__file__)
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
-  <!-- Connect / Settings modal -->
-  <div id="connectModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="connectTitle">
-    <div class="modal__scrim" data-close></div>
-    <div class="modal__card">
-      <header class="modal__hdr">
-        <h3 id="connectTitle">Connect to Klerno API</h3>
-        <button class="modal__x" type="button" title="Close" aria-label="Close" data-close>×</button>
-      </header>
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+templates.env.globals["url_path_for"] = app.url_path_for
 
-      <div class="modal__body">
-        <label class="frow">
-          <span>x-api-key</span>
-          <input id="inpKey" type="password" placeholder="Paste your API key" autocomplete="off" />
-        </label>
+# Config flags for UI auth redirects
+ADMIN_EMAIL = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
-        <div class="grid2small">
-          <label class="frow">
-            <span>Risk threshold</span>
-            <input id="inpThresh" type="number" min="0" max="1" step="0.01" placeholder="0.75" />
-          </label>
-          <label class="frow">
-            <span>Time range (days)</span>
-            <select id="selRange">
-              <option value="7">Last 7 days</option>
-              <option value="30">Last 30 days</option>
-              <option value="1">Last 24 hours</option>
-            </select>
-          </label>
-        </div>
+# Include routers
+from . import paywall  # noqa: E402
+app.include_router(paywall.router)
+app.include_router(auth_router.router)
+app.include_router(paywall_hooks.router)
+app.include_router(analyze_tags_router)
 
-        <p class="hint">We’ll save these to your account so they persist across sessions.</p>
-      </div>
+# Init DB
+store.init_db()
 
-      <footer class="modal__ftr">
-        <button class="btn" data-close>Cancel</button>
-        <button id="btnConnect" class="btn primary">Connect</button>
-      </footer>
-    </div>
-  </div>
+# ---- Live push hub (WebSocket) ----------------------------------------------
+class LiveHub:
+    """
+    In-process pub/sub for real-time pushes.
+    Each client can send {"watch":["rAddr1","rAddr2"]} to limit events.
+    If no watch is set, client receives all events.
+    """
+    def __init__(self):
+        self._clients: dict[WebSocket, set[str]] = {}
+        self._lock = asyncio.Lock()
 
-  <!-- Toasts -->
-  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
+    async def add(self, ws: WebSocket):
+        await ws.accept()
+        async with self._lock:
+            self._clients[ws] = set()
 
-  <script>
-  (function(){
-    const $ = sel => document.querySelector(sel);
+    async def remove(self, ws: WebSocket):
+        async with self._lock:
+            self._clients.pop(ws, None)
 
-    const pill = $('#statusPill');
-    const modal = $('#connectModal');
-    const btnConnect = $('#btnConnect');
-    const inpKey = $('#inpKey');
-    const inpThresh = $('#inpThresh');
-    const selRange = $('#selRange');
-    const toasts = $('#toasts');
+    async def update_watch(self, ws: WebSocket, watch: set[str]):
+        async with self._lock:
+            if ws in self._clients:
+                self._clients[ws] = {w.strip().lower() for w in watch if w}
 
-    const state = {
-      settings: {},
-      connected: false,
-      metrics: null,
-      refreshHandle: null
-    };
+    async def publish(self, item: dict):
+        fa = (item.get("from_addr") or "").lower()
+        ta = (item.get("to_addr") or "").lower()
+        async with self._lock:
+            targets = []
+            for ws, watch in self._clients.items():
+                if not watch or fa in watch or ta in watch:
+                    targets.append(ws)
+        dead = []
+        for ws in targets:
+            try:
+                await ws.send_json({"type": "tx", "item": item})
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            await self.remove(ws)
 
-    // toasts
-    function toast(msg, ok=true){
-      const el = document.createElement('div');
-      el.className = 'toast ' + (ok ? 'ok' : 'err');
-      el.textContent = msg;
-      toasts.appendChild(el);
-      setTimeout(()=>{ el.remove(); }, 2400);
-    }
+live = LiveHub()
 
-    // modal
-    function openModal(){
-      modal.classList.remove('hidden');
-      modal.querySelector('[data-close]').focus();
-      inpKey.value = ''; // never reveal stored key
-      inpThresh.value = state.settings.risk_threshold ?? '';
-      selRange.value = (state.settings.time_range_days ?? 7).toString();
-      pill.setAttribute('aria-expanded', 'true');
-    }
-    function closeModal(){
-      modal.classList.add('hidden');
-      pill.setAttribute('aria-expanded', 'false');
-    }
-    modal.addEventListener('click', (e) => {
-      if (e.target.matches('[data-close], .modal__scrim')) closeModal();
-    });
-    pill?.addEventListener('click', openModal);
-    document.addEventListener('keydown', (e)=>{
-      if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
-    });
+@app.websocket("/ws/alerts")
+async def ws_alerts(ws: WebSocket):
+    """
+    Bidirectional WS for live events.
+    Client may send:
+      {"watch":["rXXXXXXXX","rYYYYYYYY"]}  -> set/replace watchlist (lowercased)
+      {"ping": true}                        -> keepalive
+    Server replies with {"type":"ack", "watch":[...]} for watch updates.
+    """
+    await live.add(ws)
+    try:
+        while True:
+            msg = await ws.receive_text()
+            try:
+                data = json.loads(msg) if msg else {}
+            except Exception:
+                data = {}
+            if "watch" in data and isinstance(data["watch"], list):
+                watch = {str(x).strip().lower() for x in data["watch"] if isinstance(x, str)}
+                await live.update_watch(ws, watch)
+                await ws.send_json({"type": "ack", "watch": sorted(list(watch))})
+            else:
+                # optional keepalive echo
+                await ws.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await live.remove(ws)
 
-    // settings I/O (server)
-    async function loadSettings(){
-      try{
-        const r = await fetch('/me/settings', {credentials:'include'});
-        if(!r.ok) throw 0;
-        state.settings = await r.json();
-      }catch{ state.settings = {}; }
-    }
-    async function saveSettings(patch){
-      const merged = {...state.settings, ...patch};
-      const r = await fetch('/me/settings', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        credentials:'include',
-        body: JSON.stringify(patch) // merge happens server-side
-      });
-      const j = await r.json().catch(()=> ({}));
-      if(!r.ok || j.ok === false) throw new Error(j.error || 'save failed');
-      state.settings = j.settings || merged;
-      return state.settings;
-    }
 
-    // local helpers (fallback / convenience)
-    const LOCAL_KEY = 'cw_api_key';
-    function readKeyFromLocalOrQS(){
-      const qs = new URLSearchParams(location.search).get('key') || '';
-      const ls = localStorage.getItem(LOCAL_KEY) || '';
-      return (qs || ls).trim();
-    }
-    function persistLocalKey(k){
-      if (k) localStorage.setItem(LOCAL_KEY, k);
-    }
+# =========================
+# Email (SendGrid)
+# =========================
+SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
+ALERT_FROM = os.getenv("ALERT_EMAIL_FROM", "").strip()
+ALERT_TO = os.getenv("ALERT_EMAIL_TO", "").strip()
 
-    // header helpers
-    function setPill(connected, subtitle){
-      state.connected = !!connected;
-      pill.classList.toggle('pill--connected', connected);
-      pill.classList.toggle('pill--disconnected', !connected);
-      pill.innerHTML = `<span class="dot" aria-hidden="true"></span> ${connected ? 'Connected' : 'Not connected'}${subtitle? ' • '+subtitle:''}`;
-    }
-    function apiHeaders(){
-      const k = state.settings.x_api_key || '';
-      const h = {};
-      if (k) h['x-api-key'] = k;
-      return h;
-    }
 
-    // painters
-    function fmt(n){ return Intl.NumberFormat().format(n); }
-    function paintKPIs(m){
-      const elTotal = document.getElementById('kpiTotal');
-      const elAlerts = document.getElementById('kpiAlerts');
-      const elAvg = document.getElementById('kpiAvg');
+def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict[str, Any]:
+    """Send email via SendGrid. Returns diagnostic dict (never raises)."""
+    recipient = (to_email or ALERT_TO).strip()
+    if not (SENDGRID_KEY and ALERT_FROM and recipient):
+        return {"sent": False, "reason": "missing SENDGRID_API_KEY/ALERT_EMAIL_FROM/ALERT_EMAIL_TO"}
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, Email, To, Content
+        msg = Mail(
+            from_email=Email(ALERT_FROM),
+            to_emails=To(recipient),
+            subject=subject,
+            plain_text_content=Content("text/plain", text),
+        )
+        sg = SendGridAPIClient(SENDGRID_KEY)
+        resp = sg.send(msg)
+        ok = 200 <= resp.status_code < 300
+        return {"sent": ok, "status_code": resp.status_code, "to": recipient}
+    except Exception as e:
+        return {"sent": False, "error": str(e)}
 
-      if (elTotal) elTotal.textContent = fmt(m.total || 0);
-      if (elAlerts) elAlerts.textContent = fmt(m.alerts || 0);
-      if (elAvg) elAvg.textContent = (m.avg_risk ?? 0).toFixed(3);
 
-      const s = m.series_by_day || [];
-      const elDelta = document.getElementById('kpiAvgDelta');
-      if (s.length >= 2 && elDelta) {
-        const last = +s[s.length-1].avg_risk || 0;
-        const prev = +s[s.length-2].avg_risk || 0;
-        const delta = (last - prev) / (prev || 1) * 100;
-        elDelta.textContent = ' • ' + (delta>=0? '▲':'▼') + Math.abs(delta).toFixed(1) + '%';
-      } else if (elDelta) {
-        elDelta.textContent = '';
-      }
+def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
+    """If risk >= threshold, email an alert. Uses new .score/.flags fields."""
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    if (tagged.score or 0) < threshold:
+        return {"sent": False, "reason": f"score {tagged.score} < threshold {threshold}"}
 
-      // categories
-      const catsDiv = document.getElementById('cats');
-      const cats = Object.entries(m.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
-      catsDiv.innerHTML = cats.length
-        ? cats.map(([k,v])=>`<span class="tag">${k} · ${v}</span>`).join(' ')
-        : '<span class="muted">none</span>';
-    }
+    subject = f"[Klerno Labs Alert] {tagged.category or 'unknown'} — risk {round(tagged.score or 0, 3)}"
+    lines = [
+        f"Time:       {tagged.timestamp}",
+        f"Chain:      {tagged.chain}",
+        f"Tx ID:      {tagged.tx_id}",
+        f"From → To:  {tagged.from_addr} → {tagged.to_addr}",
+        f"Amount:     {tagged.amount} {tagged.symbol}",
+        f"Direction:  {tagged.direction}",
+        f"Fee:        {tagged.fee}",
+        f"Category:   {tagged.category}",
+        f"Risk Score: {round(tagged.score or 0, 3)}",
+        f"Flags:      {', '.join(tagged.flags or []) or '—'}",
+        f"Notes:      {getattr(tagged, 'notes', '') or '—'}",
+    ]
+    return _send_email(subject, "\n".join(lines))
 
-    function paintChart(series){
-      const cv = document.getElementById('chartRisk'); if(!cv) return;
-      const dpr = Math.min(window.devicePixelRatio||1,2);
-      const parent = cv.parentElement;
-      const w = parent.clientWidth, h = 220;
-      cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
-      cv.style.width = w+'px'; cv.style.height = h+'px';
-      const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
 
-      if(!series.length){
-        ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return;
-      }
-      const xs = series.map(d => new Date(d.date).getTime());
-      const ys = series.map(d => +d.avg_risk || 0);
-      const minX=Math.min(...xs), maxX=Math.max(...xs);
-      const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
-      const pad=16, top=10, bottom=28;
-      const iw = w - pad*2, ih = h - top - bottom;
-      const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
-      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+# ---------------- Landing & health ----------------
+@app.get("/", include_in_schema=False)
+def landing(request: Request):
+    return templates.TemplateResponse("landing.html", {"request": request})
 
-      const grad = ctx.createLinearGradient(0, top, 0, top+ih);
-      grad.addColorStop(0,'rgba(123,108,255,.45)'); grad.addColorStop(1,'rgba(123,108,255,0)');
-      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
-      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
-      ctx.lineTo(X(xs[xs.length-1]), top+ih); ctx.lineTo(X(xs[0]), top+ih); ctx.closePath();
-      ctx.fillStyle = grad; ctx.fill();
 
-      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
-      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
-      ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
+@app.head("/", include_in_schema=False)
+def root_head():
+    # Satisfy Render's HEAD check with 200
+    return HTMLResponse(status_code=200)
+
+
+@app.get("/health")
+def health(auth: bool = Security(enforce_api_key)):
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"status": "ok"}
+
+
+# ---------------- UI Login / Signup / Logout ----------------
+@app.get("/login", include_in_schema=False)
+def login_page(request: Request, error: str | None = None):
+    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+
+
+@app.post("/login", include_in_schema=False)
+def login_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+):
+    e = (email or "").lower().strip()
+    user = store.get_user_by_email(e)
+    if not user or not verify_pw(password, user["password_hash"]):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Invalid credentials"},
+            status_code=400,
+        )
+    token = issue_jwt(user["id"], user["email"], user["role"])
+    is_paid = bool(user.get("subscription_active")) or user.get("role") == "admin" or DEMO_MODE
+    dest = "/dashboard" if is_paid else "/paywall"
+    resp = RedirectResponse(url=dest, status_code=303)
+    resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    return resp
+
+
+@app.get("/signup", include_in_schema=False)
+def signup_page(request: Request, error: str | None = None):
+    return templates.TemplateResponse("signup.html", {"request": request, "error": error})
+
+
+@app.post("/signup", include_in_schema=False)
+def signup_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+):
+    e = (email or "").lower().strip()
+    if store.get_user_by_email(e):
+        return templates.TemplateResponse(
+            "signup.html",
+            {"request": request, "error": "User already exists"},
+            status_code=400,
+        )
+    role = "viewer"
+    sub_active = False
+    # Bootstrap: first user or ADMIN_EMAIL becomes admin + active sub
+    if e == ADMIN_EMAIL or store.users_count() == 0:
+        role, sub_active = "admin", True
+    user = store.create_user(e, hash_pw(password), role=role, subscription_active=sub_active)
+    token = issue_jwt(user["id"], user["email"], user["role"])
+    dest = "/dashboard" if (sub_active or role == "admin" or DEMO_MODE) else "/paywall"
+    resp = RedirectResponse(url=dest, status_code=303)
+    resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    return resp
+
+
+@app.get("/logout", include_in_schema=False)
+def logout_ui():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie("session")
+    return resp
+
+
+# --- User & Settings API (aligned with store.get_settings/save_settings) ---
+from typing import Optional, Dict, Any
+from pydantic import BaseModel
+
+class SettingsPayload(BaseModel):
+    x_api_key: Optional[str] = None
+    risk_threshold: Optional[float] = None
+    time_range_days: Optional[int] = None
+    ui_prefs: Optional[Dict[str, Any]] = None
+
+@app.get("/me", include_in_schema=False)
+def me(user=Depends(require_user)):
+    """Basic profile for the signed-in user (used by front-end)."""
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "role": user["role"],
+        "subscription_active": bool(user.get("subscription_active")),
     }
 
-    async function loadRecentHighRisk(){
-      const r = await fetch('/alerts?limit=50', { headers: apiHeaders() });
-      const tbody = document.getElementById('tblRecent'); if(!tbody) return;
-      if(!r.ok){
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">Unauthorized for alerts preview</td></tr>`;
-        return;
-      }
-      const data = await r.json();
-      const items = (data.items||[]).slice(0,50);
-      if (!items.length){
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
-        return;
-      }
-      tbody.innerHTML = items.map(it=>{
-        const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
-        const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
-        const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
-        const cat= it.category || 'unknown';
-        const risk = Number(it.risk_score ?? it.score ?? 0).toFixed(3);
-        const raw  = Number(it.risk_score ?? it.score ?? 0);
-        const cls  = raw >= (state.settings.risk_threshold || 0.75) ? 'warn' : 'ok';
-        return `<tr>
-          <td>${t}</td>
-          <td>${ft}</td>
-          <td>${amt}</td>
-          <td><span class="tag">${cat}</span></td>
-          <td class="${cls}">${risk}</td>
-        </tr>`;
-      }).join('');
+@app.get("/me/settings")
+def me_settings_get(user=Depends(require_user)):
+    """
+    Return the current user's saved settings.
+    Aligns with store.get_settings(user_id).
+    """
+    return store.get_settings(user["id"])
+
+@app.post("/me/settings")
+def me_settings_post(payload: SettingsPayload, user=Depends(require_user)):
+    """
+    Merge/overwrite whitelisted keys, save via store.save_settings(user_id, patch),
+    then return the latest stored settings.
+    """
+    allowed = {"x_api_key", "risk_threshold", "time_range_days", "ui_prefs"}
+    patch = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k in allowed}
+
+    # light coercion/validation
+    if "risk_threshold" in patch:
+        patch["risk_threshold"] = max(0.0, min(1.0, float(patch["risk_threshold"])))
+    if "time_range_days" in patch:
+        patch["time_range_days"] = max(1, int(patch["time_range_days"]))
+
+    # persist & re-read
+    store.save_settings(user["id"], patch)
+    settings = store.get_settings(user["id"])
+    return {"ok": True, "settings": settings}
+
+
+# ---------------- Core API ----------------
+@app.post("/analyze/tx", response_model=TaggedTransaction)
+def analyze_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
+    risk, flags = score_risk(tx)
+    category = tag_category(tx)
+    return TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
+
+
+@app.post("/analyze/batch")
+def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)):
+    tagged: List[TaggedTransaction] = []
+    for tx in txs:
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
+    return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
+
+
+@app.post("/report/csv")
+def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
+    df = pd.read_csv(os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv"))
+
+    # normalize timestamp to datetime for filtering
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    # Basic guards for missing fields
+    for col in ("from_addr", "to_addr"):
+        if col not in df.columns:
+            df[col] = ""
+
+    # Support both wallet_addresses and single address field
+    wallets = set(getattr(req, "wallet_addresses", None) or ([] if not getattr(req, "address", None) else [req.address]))
+
+    start = pd.to_datetime(req.start) if getattr(req, "start", None) else df["timestamp"].min()
+    end = pd.to_datetime(req.end) if getattr(req, "end", None) else df["timestamp"].max()
+
+    mask_wallet = True if not wallets else (df["to_addr"].isin(wallets) | df["from_addr"].isin(wallets))
+    mask = (df["timestamp"] >= start) & (df["timestamp"] <= end) & mask_wallet
+    selected = df[mask].copy()
+
+    # Build Transaction safely: keep only dataclass fields
+    tx_field_names = {f.name for f in dc_fields(Transaction)}
+    items: List[TaggedTransaction] = []
+    for _, row in selected.iterrows():
+        raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
+        clean = {k: v for k, v in raw.items() if k in tx_field_names}
+        tx = Transaction(**clean)
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        items.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
+
+    return {"csv": csv_export(items)}
+
+
+# ---------------- XRPL parse (posted JSON) ----------------
+@app.post("/integrations/xrpl/parse")
+def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Security(enforce_api_key)):
+    txs = xrpl_json_to_transactions(account, payload)
+    tagged: List[TaggedTransaction] = []
+    for tx in txs:
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
+    return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
+
+
+@app.post("/analyze/sample")
+def analyze_sample(auth: bool = Security(enforce_api_key)):
+    data_path = os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv")
+    df = pd.read_csv(data_path)
+
+    # Coerce text columns and normalize
+    text_cols = ("memo", "notes", "symbol", "direction", "chain", "tx_id", "from_addr", "to_addr")
+    for col in text_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str)
+
+    # Normalize timestamp (Pydantic can parse ISO strings)
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Numeric
+    for col in ("amount", "fee", "risk_score"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Build transactions (dataclass)
+    txs: List[Transaction] = []
+    tx_field_names = {f.name for f in dc_fields(Transaction)}
+    for _, row in df.iterrows():
+        raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
+        clean = {k: v for k, v in raw.items() if k in tx_field_names}
+        txs.append(Transaction(**clean))
+
+    # Score + tag
+    tagged: List[TaggedTransaction] = []
+    for tx in txs:
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
+
+    return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
+
+
+# ---------------- “Memory” (DB) + email on save ----------------
+@app.post("/analyze_and_save/tx")
+async def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
+    risk, flags = score_risk(tx)
+    category = tag_category(tx)
+    tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
+    # back-compat fields when saving
+    d = tagged.model_dump()
+    d["risk_score"] = d.get("score")
+    d["risk_flags"] = d.get("flags")
+    store.save_tagged(d)
+    # NEW: push to live feed
+    await live.publish(d)
+    email_result = notify_if_alert(tagged)
+    return {"saved": True, "item": d, "email": email_result}
+
+
+@app.get("/transactions/{wallet}")
+def get_transactions_for_wallet(wallet: str, limit: int = 100, auth: bool = Security(enforce_api_key)):
+    rows = store.list_by_wallet(wallet, limit=limit)
+    return {"wallet": wallet, "count": len(rows), "items": rows}
+
+
+@app.get("/alerts")
+def get_alerts(limit: int = 100, auth: bool = Security(enforce_api_key)):
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    rows = store.list_alerts(threshold, limit=limit)
+    return {"threshold": threshold, "count": len(rows), "items": rows}
+
+
+# ---------------- XRPL fetch (read-only) ----------------
+@app.get("/integrations/xrpl/fetch")
+def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
+    raw = fetch_account_tx(account, limit=limit)
+    txs = xrpl_json_to_transactions(account, raw)
+    tagged: List[TaggedTransaction] = []
+    for tx in txs:
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
+    return {"count": len(tagged), "items": [t.model_dump() for t in tagged]}
+
+
+@app.post("/integrations/xrpl/fetch_and_save")
+async def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
+    raw = fetch_account_tx(account, limit=limit)
+    txs = xrpl_json_to_transactions(account, raw)
+    saved = 0
+    tagged_items: List[Dict[str, Any]] = []
+    emails: List[Dict[str, Any]] = []
+    for tx in txs:
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
+        d = tagged.model_dump()
+        d["risk_score"] = d.get("score")
+        d["risk_flags"] = d.get("flags")
+        store.save_tagged(d)
+        saved += 1
+        tagged_items.append(d)
+        emails.append(notify_if_alert(tagged))
+        # NEW: push each saved tx live
+        await live.publish(d)
+    return {
+        "account": account,
+        "requested": limit,
+        "fetched": len(txs),
+        "saved": saved,
+        "threshold": float(os.getenv("RISK_THRESHOLD", "0.75")),
+        "items": tagged_items,
+        "emails": emails,
     }
 
-    // metrics + connectivity
-    async function loadMetricsOnce(){
-      try{
-        const r = await fetch('/metrics', { headers: apiHeaders() });
-        if(!r.ok) throw 0;
-        const data = await r.json();
-        state.metrics = data;
-        setPill(true, (state.settings.time_range_days||7)+'d');
-        paintKPIs(data);
-        paintChart(data.series_by_day || []);
-        await loadRecentHighRisk();
-      }catch{
-        setPill(false);
-      }
+
+# ---------------- CSV export (DB) ----------------
+@app.get("/export/csv")
+def export_csv_from_db(wallet: str | None = None, limit: int = 1000, auth: bool = Security(enforce_api_key)):
+    rows = store.list_by_wallet(wallet, limit=limit) if wallet else store.list_all(limit=limit)
+    if not rows:
+        return {"rows": 0, "csv": ""}
+    df = pd.DataFrame(rows)
+    return {"rows": len(rows), "csv": df.to_csv(index=False)}
+
+
+# ---- helper: allow ?key=... or x-api-key header for download ----
+def _check_key_param_or_header(key: Optional[str] = None, x_api_key: Optional[str] = Header(default=None)):
+    """Allow auth via ?key=... or x-api-key header (used by dashboard's window.open)."""
+    exp = expected_api_key() or ""
+    incoming = (key or "").strip() or (x_api_key or "").strip()
+    if exp and incoming != exp:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+@app.get("/export/csv/download")
+def export_csv_download(
+    wallet: str | None = None,
+    limit: int = 1000,
+    key: Optional[str] = None,
+    x_api_key: Optional[str] = Header(None),
+):
+    _check_key_param_or_header(key=key, x_api_key=x_api_key)
+
+    rows = store.list_by_wallet(wallet, limit=limit) if wallet else store.list_all(limit=limit)
+    df = pd.DataFrame(rows)
+    buf = StringIO()
+    df.to_csv(buf, index=False)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=klerno-export.csv"},
+    )
+
+
+# ---------------- Metrics (JSON) ----------------
+@app.get("/metrics")
+def metrics(
+    threshold: float | None = None,
+    days: int | None = None,
+    auth: bool = Security(enforce_api_key),
+):
+    """
+    Return aggregate metrics. Optional query params:
+      - threshold: float in [0,1] (overrides env RISK_THRESHOLD)
+      - days: int (restricts to the last N days; 1..365). If omitted, uses all data.
+    """
+    rows = store.list_all(limit=10000)
+    if not rows:
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
+
+    # Resolve threshold
+    env_threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    thr = env_threshold if threshold is None else float(threshold)
+    thr = max(0.0, min(1.0, thr))
+
+    # Optional time window
+    cutoff = None
+    if days is not None:
+        try:
+            d = max(1, min(int(days), 365))
+            cutoff = datetime.utcnow() - timedelta(days=d)
+        except Exception:
+            cutoff = None
+
+    # Frame + normalization
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
+
+    # Filter by date if requested
+    if cutoff is not None:
+        df = df[df["timestamp"] >= cutoff]
+
+    if df.empty:
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
+
+    total = int(len(df))
+    alerts = int((df["risk_score"] >= thr).sum())
+    avg_risk = float(df["risk_score"].mean())
+
+    # Category counts
+    categories: Dict[str, int] = {}
+    cats_series = (df.get("category") or pd.Series(["unknown"] * total)).fillna("unknown")
+    for cat, cnt in cats_series.value_counts().items():
+        categories[str(cat)] = int(cnt)
+
+    # Series by day
+    df["day"] = df["timestamp"].dt.date
+    grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
+    series = [{"date": str(d), "avg_risk": round(float(v), 3)} for d, v in zip(grp["day"], grp["avg_risk"])]
+
+    return {
+        "total": total,
+        "alerts": alerts,
+        "avg_risk": round(avg_risk, 3),
+        "categories": categories,
+        "series_by_day": series,
     }
 
-    function startAutoRefresh(){
-      if (state.refreshHandle) clearInterval(state.refreshHandle);
-      state.refreshHandle = setInterval(loadMetricsOnce, 15000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) loadMetricsOnce(); });
-    }
 
-    // connect handler
-    btnConnect.addEventListener('click', async ()=>{
-      const patch = {
-        ...(inpKey.value.trim() ? { x_api_key: inpKey.value.trim() } : {}),
-        risk_threshold: inpThresh.value ? +inpThresh.value : undefined,
-        time_range_days: selRange.value ? +selRange.value : undefined
-      };
-      try{
-        const saved = await saveSettings(patch);
-        if (patch.x_api_key) persistLocalKey(patch.x_api_key); // convenience
-        closeModal();
-        toast('Saved ✓');
-        setPill(!!saved.x_api_key, (saved.time_range_days||7)+'d');
-        await loadMetricsOnce();
-      }catch{ toast('Save failed', false); }
-    });
+# ---------------- UI: Dashboard & Alerts ----------------
+@app.get("/dashboard", name="ui_dashboard", include_in_schema=False)
+def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
+    rows = store.list_all(limit=200)
+    total = len(rows)
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    alerts = [r for r in rows if _row_score(r) >= threshold]
+    avg_risk = round(sum(_row_score(r) for r in rows) / total, 3) if total else 0.0
+    cats: Dict[str, int] = {}
+    for r in rows:
+        c = r.get("category") or "unknown"
+        cats[c] = cats.get(c, 0) + 1
+    metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold},
+    )
 
-    // quick actions
-    $('#fetchXRPL')?.addEventListener('click', async ()=>{
-      const k = state.settings.x_api_key || '';
-      if (!k) { toast('Save your x-api-key first', false); return; }
-      const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
-      if (!acct) return;
-      const url = `/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
-      const r = await fetch(url, { method:'POST', headers: apiHeaders() });
-      toast(r.ok ? 'Fetched & saved ✓' : 'Fetch failed', r.ok);
-      await loadMetricsOnce();
-    });
-    $('#analyzeSample')?.addEventListener('click', async ()=>{
-      const r = await fetch('/analyze/sample', { method:'POST', headers: apiHeaders() });
-      toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok);
-      await loadMetricsOnce();
-    });
-    $('#exportCsv')?.addEventListener('click', ()=>{
-      const k = state.settings.x_api_key || '';
-      const url = k ? `/export/csv/download?key=${encodeURIComponent(k)}` : '/export/csv/download';
-      window.open(url, '_blank');
-    });
-    $('#btnLoadDemo')?.addEventListener('click', async ()=>{
-      try{
-        const r = await fetch('/analyze/sample', { method:'POST', headers: apiHeaders() });
-        if(!r.ok) throw 0;
-        toast('Demo data loaded ✓');
-        await loadMetricsOnce();
-      }catch{ toast('Could not load demo data', false); }
-    });
 
-    // boot
-    (async function boot(){
-      await loadSettings();
+@app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
+def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    rows = store.list_alerts(threshold=threshold, limit=500)
+    return templates.TemplateResponse(
+        "alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows}
+    )
 
-      // If no server key, fall back to ?key= or localStorage and persist
-      if (!state.settings.x_api_key) {
-        const candidate = readKeyFromLocalOrQS();
-        if (candidate) {
-          try {
-            await saveSettings({ x_api_key: candidate });
-            persistLocalKey(candidate);
-          } catch {}
-        }
-      }
 
-      // NEW: auto-open Connect modal if still no key after fallback
-      if (!state.settings.x_api_key) {
-        setPill(false);
-        openModal();
-        toast('Add your API key to connect');
-      } else {
-        setPill(true, (state.settings.time_range_days||7)+'d');
-        await loadMetricsOnce();
-      }
+# ---------------- Admin / Email tests ----------------
+@app.get("/admin/test-email", include_in_schema=False)
+def admin_test_email(request: Request):
+    key = request.query_params.get("key") or ""
+    expected = expected_api_key() or ""
+    if key != expected:
+        return HTMLResponse(content="Unauthorized. Append ?key=YOUR_API_KEY", status_code=401)
+    tx = Transaction(
+        tx_id="TEST-ALERT-123",
+        timestamp=datetime.utcnow().isoformat(),
+        chain="XRPL",
+        from_addr="rTEST_FROM",
+        to_addr="rTEST_TO",
+        amount=123.45,
+        symbol="XRP",
+        direction="out",
+        memo="Test email",
+        fee=0.0001,
+    )
+    tagged = TaggedTransaction(**_dump(tx), score=0.99, flags=["test_high_risk"], category="test-alert")
+    return {"ok": True, "email": notify_if_alert(tagged)}
 
-      startAutoRefresh();
-    })();
-  })();
-  </script>
 
-  <!-- background animation (unchanged) -->
-  <script>
-    (function(){
-      const bg = document.getElementById('bg');
-      if(!bg) return;
-      const ctx = bg.getContext('2d');
-      let W,H,DPR=Math.min(window.devicePixelRatio||1,2), P=[];
-      const rnd=n=>Math.random();
+class NotifyRequest(BaseModel):
+    email: EmailStr
 
-      function resize(){
-        W=bg.width = Math.floor(innerWidth*DPR);
-        H=bg.height= Math.floor(innerHeight*DPR);
-        bg.style.width = innerWidth+'px';
-        bg.style.height= innerHeight+'px';
-        const n=Math.floor((W*H)/(90_000*DPR));
-        P = Array.from({length:n},()=>({
-          x:rnd()*W, y:rnd()*H,
-          vx:(rnd()-.5)*.35*DPR,
-          vy:(rnd()-.5)*.35*DPR
-        }));
-      }
 
-      function step(){
-        ctx.clearRect(0,0,W,H);
-        const g=ctx.createLinearGradient(0,0,W,H);
-        g.addColorStop(0,'rgba(123,108,255,.10)');
-        g.addColorStop(.5,'rgba(0,225,255,.08)');
-        g.addColorStop(1,'rgba(255,255,255,.05)');
-        ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+@app.post("/notify/test")
+def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
+    return _send_email("Klerno Labs Test", "✅ Your Klerno Labs email system is working!", payload.email)
 
-        ctx.fillStyle='rgba(255,255,255,.45)';
-        for(const p of P){
-          p.x+=p.vx; p.y+=p.vy;
-          if(p.x<0||p.x>W) p.vx*=-1;
-          if(p.y<0||p.y>H) p.vy*=-1;
-          ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill();
-        }
 
-        ctx.strokeStyle='rgba(200,220,255,.11)';
-        for(let i=0;i<P.length;i++){
-          const a=P[i];
-          for(let j=i+1;j<P.length;j++){
-            const b=P[j],dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;
-            if(d2<18000*DPR){
-              ctx.globalAlpha=1-d2/(18000*DPR);
-              ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
-            }
-          }
-        }
-        ctx.globalAlpha=1;
-        requestAnimationFrame(step);
-      }
+# ---------------- Debug ----------------
+@app.get("/_debug/api_key")
+def debug_api_key(x_api_key: str | None = Header(default=None)):
+    exp = expected_api_key()
+    preview = (exp[:4] + "..." + exp[-4:]) if exp else ""
+    return {"received_header": x_api_key, "expected_loaded_from_env": bool(exp), "expected_length": len(exp or ""), "expected_preview": preview}
 
-      resize(); requestAnimationFrame(step);
-      addEventListener('resize', resize);
-    })();
-  </script>
-</body>
-</html>
+
+@app.get("/_debug/routes", include_in_schema=False)
+def list_routes():
+    return {"routes": [r.path for r in app.router.routes]}
+
+
+# ---------------- LLM Explain & AI Endpoints ----------------
+class AskRequest(BaseModel):
+    question: str
+
+
+class BatchTx(BaseModel):
+    items: List[Transaction]
+
+
+@app.post("/explain/tx")
+def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key)):
+    try:
+        text = explain_tx(_dump(tx))
+        return {"explanation": text}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/explain/batch")
+def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_key)):
+    try:
+        txs = [_dump(t) for t in payload.items]
+        result = explain_batch(txs)
+        return result
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/ask")
+def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
+    try:
+        rows = store.list_all(limit=10000)
+        spec = ask_to_filters(req.question)
+        filtered = _apply_filters_safe(rows, spec)
+        answer = explain_selection(req.question, filtered)
+        preview = filtered[:50]
+        return {"filters": spec, "count": len(filtered), "preview": preview, "answer": answer}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/explain/summary")
+def explain_summary(days: int = 7, wallet: str | None = None, auth: bool = Security(enforce_api_key)):
+    try:
+        rows = store.list_by_wallet(wallet, limit=5000) if wallet else store.list_all(limit=5000)
+        cutoff = datetime.utcnow() - timedelta(days=max(1, min(days, 90)))
+        recent = []
+        for r in rows:
+            try:
+                t = datetime.fromisoformat(str(r.get("timestamp")))
+                if t >= cutoff:
+                    recent.append(r)
+            except Exception:
+                continue
+        return summarize_rows(recent, title=f"Last {days} days summary")
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
