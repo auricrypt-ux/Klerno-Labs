@@ -124,6 +124,38 @@ templates.env.globals["url_path_for"] = app.url_path_for
 ADMIN_EMAIL = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
+# ---- Session cookie config (fix dev login) ----
+SESSION_COOKIE = os.getenv("SESSION_COOKIE_NAME", "session")
+COOKIE_SECURE_MODE = os.getenv("COOKIE_SECURE", "auto").lower()  # "auto" | "true" | "false"
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()   # "lax" | "strict" | "none"
+
+def _is_secure_request(request: Request) -> bool:
+    xf = (request.headers.get("x-forwarded-proto") or "").lower()
+    if xf:
+        return "https" in xf
+    return request.url.scheme == "https"
+
+def _cookie_kwargs(request: Request) -> Dict[str, Any]:
+    if COOKIE_SECURE_MODE in ("true", "1", "yes"):
+        secure = True
+    elif COOKIE_SECURE_MODE in ("false", "0", "no"):
+        secure = False
+    else:
+        secure = _is_secure_request(request)
+
+    samesite = COOKIE_SAMESITE if COOKIE_SAMESITE in ("lax", "strict", "none") else "lax"
+    # Browsers require secure=True when SameSite=None
+    if samesite == "none" and not secure:
+        secure = True
+
+    return {
+        "httponly": True,
+        "secure": secure,
+        "samesite": samesite,
+        "max_age": 60 * 60 * 24 * 7,  # 7 days
+        "path": "/",
+    }
+
 # Include routers
 from . import paywall  # noqa: E402
 app.include_router(paywall.router)
@@ -308,7 +340,8 @@ def login_submit(
     is_paid = bool(user.get("subscription_active")) or user.get("role") == "admin" or DEMO_MODE
     dest = "/dashboard" if is_paid else "/paywall"
     resp = RedirectResponse(url=dest, status_code=303)
-    resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    # FIX: adaptive cookie flags for dev/prod
+    resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
 
@@ -339,14 +372,16 @@ def signup_submit(
     token = issue_jwt(user["id"], user["email"], user["role"])
     dest = "/dashboard" if (sub_active or role == "admin" or DEMO_MODE) else "/paywall"
     resp = RedirectResponse(url=dest, status_code=303)
-    resp.set_cookie("session", token, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    # FIX: adaptive cookie flags for dev/prod
+    resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
 
 @app.get("/logout", include_in_schema=False)
 def logout_ui():
     resp = RedirectResponse("/", status_code=303)
-    resp.delete_cookie("session")
+    # use same cookie name and path
+    resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
 
 
