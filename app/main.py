@@ -18,6 +18,8 @@ from fastapi import (
     HTTPException,
     Depends,
     Form,
+    WebSocket,
+    WebSocketDisconnect,
 )
 from fastapi.responses import (
     StreamingResponse,
@@ -28,6 +30,9 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
+
+# NEW: for live push hub
+import asyncio, json
 
 from . import store
 from .models import Transaction, TaggedTransaction, ReportRequest
@@ -127,6 +132,79 @@ app.include_router(analyze_tags_router)
 
 # Init DB
 store.init_db()
+
+# ---- Live push hub (WebSocket) ----------------------------------------------
+class LiveHub:
+    """
+    In-process pub/sub for real-time pushes.
+    Each client can send {"watch":["rAddr1","rAddr2"]} to limit events.
+    If no watch is set, client receives all events.
+    """
+    def __init__(self):
+        self._clients: dict[WebSocket, set[str]] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, ws: WebSocket):
+        await ws.accept()
+        async with self._lock:
+            self._clients[ws] = set()
+
+    async def remove(self, ws: WebSocket):
+        async with self._lock:
+            self._clients.pop(ws, None)
+
+    async def update_watch(self, ws: WebSocket, watch: set[str]):
+        async with self._lock:
+            if ws in self._clients:
+                self._clients[ws] = {w.strip().lower() for w in watch if w}
+
+    async def publish(self, item: dict):
+        fa = (item.get("from_addr") or "").lower()
+        ta = (item.get("to_addr") or "").lower()
+        async with self._lock:
+            targets = []
+            for ws, watch in self._clients.items():
+                if not watch or fa in watch or ta in watch:
+                    targets.append(ws)
+        dead = []
+        for ws in targets:
+            try:
+                await ws.send_json({"type": "tx", "item": item})
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            await self.remove(ws)
+
+live = LiveHub()
+
+@app.websocket("/ws/alerts")
+async def ws_alerts(ws: WebSocket):
+    """
+    Bidirectional WS for live events.
+    Client may send:
+      {"watch":["rXXXXXXXX","rYYYYYYYY"]}  -> set/replace watchlist (lowercased)
+      {"ping": true}                        -> keepalive
+    Server replies with {"type":"ack", "watch":[...]} for watch updates.
+    """
+    await live.add(ws)
+    try:
+        while True:
+            msg = await ws.receive_text()
+            try:
+                data = json.loads(msg) if msg else {}
+            except Exception:
+                data = {}
+            if "watch" in data and isinstance(data["watch"], list):
+                watch = {str(x).strip().lower() for x in data["watch"] if isinstance(x, str)}
+                await live.update_watch(ws, watch)
+                await ws.send_json({"type": "ack", "watch": sorted(list(watch))})
+            else:
+                # optional keepalive echo
+                await ws.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await live.remove(ws)
 
 
 # =========================
@@ -270,13 +348,15 @@ def logout_ui():
     return resp
 
 
-# ---------------------- User & Settings API ----------------------
+# --- User & Settings API (aligned with store.get_settings/save_settings) ---
+from typing import Optional, Dict, Any
+from pydantic import BaseModel
+
 class SettingsPayload(BaseModel):
     x_api_key: Optional[str] = None
     risk_threshold: Optional[float] = None
     time_range_days: Optional[int] = None
     ui_prefs: Optional[Dict[str, Any]] = None
-
 
 @app.get("/me", include_in_schema=False)
 def me(user=Depends(require_user)):
@@ -288,24 +368,32 @@ def me(user=Depends(require_user)):
         "subscription_active": bool(user.get("subscription_active")),
     }
 
-
 @app.get("/me/settings")
 def me_settings_get(user=Depends(require_user)):
-    """Return the current user's saved settings ({} if none)."""
-    return store.get_settings_for_user(user["id"])
-
+    """
+    Return the current user's saved settings.
+    Aligns with store.get_settings(user_id).
+    """
+    return store.get_settings(user["id"])
 
 @app.post("/me/settings")
 def me_settings_post(payload: SettingsPayload, user=Depends(require_user)):
-    """Merge/overwrite the user's settings with provided keys (whitelisted)."""
+    """
+    Merge/overwrite whitelisted keys, save via store.save_settings(user_id, patch),
+    then return the latest stored settings.
+    """
     allowed = {"x_api_key", "risk_threshold", "time_range_days", "ui_prefs"}
     patch = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k in allowed}
-    # light coercion
+
+    # light coercion/validation
     if "risk_threshold" in patch:
-        patch["risk_threshold"] = float(patch["risk_threshold"])
+        patch["risk_threshold"] = max(0.0, min(1.0, float(patch["risk_threshold"])))
     if "time_range_days" in patch:
-        patch["time_range_days"] = int(patch["time_range_days"])
-    settings = store.save_settings_for_user(user["id"], patch)
+        patch["time_range_days"] = max(1, int(patch["time_range_days"]))
+
+    # persist & re-read
+    store.save_settings(user["id"], patch)
+    settings = store.get_settings(user["id"])
     return {"ok": True, "settings": settings}
 
 
@@ -419,7 +507,7 @@ def analyze_sample(auth: bool = Security(enforce_api_key)):
 
 # ---------------- “Memory” (DB) + email on save ----------------
 @app.post("/analyze_and_save/tx")
-def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
+async def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
     tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
@@ -428,6 +516,8 @@ def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key))
     d["risk_score"] = d.get("score")
     d["risk_flags"] = d.get("flags")
     store.save_tagged(d)
+    # NEW: push to live feed
+    await live.publish(d)
     email_result = notify_if_alert(tagged)
     return {"saved": True, "item": d, "email": email_result}
 
@@ -459,7 +549,7 @@ def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_
 
 
 @app.post("/integrations/xrpl/fetch_and_save")
-def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
+async def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
     raw = fetch_account_tx(account, limit=limit)
     txs = xrpl_json_to_transactions(account, raw)
     saved = 0
@@ -476,6 +566,8 @@ def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enf
         saved += 1
         tagged_items.append(d)
         emails.append(notify_if_alert(tagged))
+        # NEW: push each saved tx live
+        await live.publish(d)
     return {
         "account": account,
         "requested": limit,
@@ -529,30 +621,64 @@ def export_csv_download(
 
 # ---------------- Metrics (JSON) ----------------
 @app.get("/metrics")
-def metrics(auth: bool = Security(enforce_api_key)):
+def metrics(
+    threshold: float | None = None,
+    days: int | None = None,
+    auth: bool = Security(enforce_api_key),
+):
+    """
+    Return aggregate metrics. Optional query params:
+      - threshold: float in [0,1] (overrides env RISK_THRESHOLD)
+      - days: int (restricts to the last N days; 1..365). If omitted, uses all data.
+    """
     rows = store.list_all(limit=10000)
-    total = len(rows)
-    if total == 0:
+    if not rows:
         return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
-    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
-    alerts = [r for r in rows if _row_score(r) >= threshold]
-    avg_risk = sum(_row_score(r) for r in rows) / total
+
+    # Resolve threshold
+    env_threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    thr = env_threshold if threshold is None else float(threshold)
+    thr = max(0.0, min(1.0, thr))
+
+    # Optional time window
+    cutoff = None
+    if days is not None:
+        try:
+            d = max(1, min(int(days), 365))
+            cutoff = datetime.utcnow() - timedelta(days=d)
+        except Exception:
+            cutoff = None
+
+    # Frame + normalization
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
+
+    # Filter by date if requested
+    if cutoff is not None:
+        df = df[df["timestamp"] >= cutoff]
+
+    if df.empty:
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
+
+    total = int(len(df))
+    alerts = int((df["risk_score"] >= thr).sum())
+    avg_risk = float(df["risk_score"].mean())
+
+    # Category counts
     categories: Dict[str, int] = {}
-    for r in rows:
-        cat = r.get("category") or "unknown"
-        categories[cat] = categories.get(cat, 0) + 1
-    try:
-        df = pd.DataFrame(rows)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
-        df["day"] = df["timestamp"].dt.date
-        grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
-        series = [{"date": str(d), "avg_risk": round(float(v), 3)} for d, v in zip(grp["day"], grp["avg_risk"])]
-    except Exception:
-        series = []
+    cats_series = (df.get("category") or pd.Series(["unknown"] * total)).fillna("unknown")
+    for cat, cnt in cats_series.value_counts().items():
+        categories[str(cat)] = int(cnt)
+
+    # Series by day
+    df["day"] = df["timestamp"].dt.date
+    grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
+    series = [{"date": str(d), "avg_risk": round(float(v), 3)} for d, v in zip(grp["day"], grp["avg_risk"])]
+
     return {
         "total": total,
-        "alerts": len(alerts),
+        "alerts": alerts,
         "avg_risk": round(avg_risk, 3),
         "categories": categories,
         "series_by_day": series,

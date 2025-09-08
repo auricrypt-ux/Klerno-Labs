@@ -1,4 +1,4 @@
-<!doctype html>
+<!doctype html> 
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
@@ -13,7 +13,7 @@
     body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
          background:var(--bg); color:var(--ink)}
 
-    /* === animated background (added) === */
+    /* animated background */
     canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
     .vignette{
       position:fixed; inset:0; z-index:1; pointer-events:none;
@@ -24,7 +24,7 @@
     .wrap{max-width:1100px; margin:32px auto; padding:0 16px; position:relative; z-index:2}
     header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px}
 
-    /* brand wordmark in header (added earlier) */
+    /* brand */
     .brand{display:flex; align-items:center; gap:10px; text-decoration:none}
     .brand .wordmark{
       height:28px; display:block;
@@ -34,8 +34,6 @@
     @media (min-width:900px){ .brand .wordmark{ height:32px } }
     .brand:hover .wordmark{ transform:translateY(-1px); filter:drop-shadow(0 4px 16px rgba(108,99,255,.35)) }
 
-    h1{margin:0; font-size:24px; font-weight:700}
-    .pill{padding:6px 10px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:12px}
     .row{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0}
     @media (max-width:920px){ .row{grid-template-columns:1fr} }
     .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px}
@@ -43,7 +41,7 @@
     .muted{color:var(--muted)}
     .actions{display:flex; gap:10px; flex-wrap:wrap}
     .btn{display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:#151e3c; color:var(--ink); text-decoration:none; cursor:pointer}
-    .btn.cta{background:var(--cta); border-color:#574bdb; color:white}
+    .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
     .grid2{display:grid; grid-template-columns:2fr 1fr; gap:14px}
     @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
     canvas{width:100%; height:220px; display:block}
@@ -56,27 +54,55 @@
     .warn{color:var(--warn)}
     .note{font-size:12px; color:var(--muted)}
     .right{display:flex; align-items:center; gap:10px}
-    input[type="password"]{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0b1020; color:var(--ink)}
+
+    /* status pill */
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);
+      border-radius:999px;background:rgba(255,255,255,.06);color:var(--ink);cursor:pointer;font-weight:700;font-size:12px}
+    .pill .dot{width:8px;height:8px;border-radius:50%;background:#a0a0a0;box-shadow:0 0 10px rgba(160,160,160,.5)}
+    .pill--connected .dot{background:#34d399}
+    .pill--connected{border-color:rgba(52,211,153,.35)}
+    .pill--disconnected{opacity:.9}
+
+    /* modal */
+    .modal.hidden{display:none}
+    .modal{position:fixed;inset:0;z-index:60}
+    .modal__scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(4px)}
+    .modal__card{position:relative;max-width:520px;margin:8vh auto;background:var(--panel);border:1px solid var(--line);
+      border-radius:16px;padding:0;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+    .modal__hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
+    .modal__body{padding:16px 18px;display:grid;gap:14px}
+    .modal__ftr{padding:14px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
+    .modal__x{border:0;background:transparent;color:var(--ink);font-size:22px;cursor:pointer}
+    .frow{display:grid;gap:6px}
+    .frow input,.frow select{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0b1020;color:var(--ink)}
+    .grid2small{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .hint{color:var(--muted);font-size:12px}
+
+    /* toasts */
+    .toasts{position:fixed;right:16px;bottom:16px;display:grid;gap:8px;z-index:70}
+    .toast{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.6)}
+    .toast.ok{border-color:rgba(52,211,153,.4)}
+    .toast.err{border-color:rgba(239,68,68,.5)}
   </style>
 </head>
 <body>
-  <!-- animated background (added) -->
+  <!-- animated background -->
   <canvas id="bg" aria-hidden="true"></canvas>
   <div class="vignette" aria-hidden="true"></div>
 
   <div class="wrap">
     <header>
-      <!-- replaced title with wordmark -->
       <a class="brand" href="/">
         <img class="wordmark" src="/static/klerno-wordmark.png" alt="Klerno Labs">
       </a>
 
       <div class="right">
-        <input id="apikey" type="password" placeholder="x-api-key (optional)"/>
-        <button id="saveKey" class="btn">Save</button>
         <a class="btn" href="/alerts-ui">🚨 Alerts</a>
         <a class="btn" href="/docs" target="_blank" rel="noopener">📜 API</a>
-        <span class="pill" id="status">loading…</span>
+        <!-- status pill (opens modal) -->
+        <button id="statusPill" class="pill pill--disconnected" type="button" aria-haspopup="dialog" aria-expanded="false">
+          <span class="dot" aria-hidden="true"></span> Not connected
+        </button>
       </div>
     </header>
 
@@ -84,15 +110,15 @@
     <div class="row">
       <div class="card">
         <div class="muted">Total processed</div>
-        <div class="kpi" id="kTotal">—</div>
+        <div class="kpi" id="kpiTotal">—</div>
       </div>
       <div class="card">
         <div class="muted">Alerts ≥ threshold</div>
-        <div class="kpi" id="kAlerts">—</div>
+        <div class="kpi" id="kpiAlerts">—</div>
       </div>
       <div class="card">
-        <div class="muted">Average risk</div>
-        <div class="kpi" id="kAvg">—</div>
+        <div class="muted">Average risk <small id="kpiAvgDelta" class="muted"></small></div>
+        <div class="kpi" id="kpiAvg">—</div>
       </div>
     </div>
 
@@ -100,7 +126,7 @@
       <!-- mini chart -->
       <div class="card">
         <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
-        <canvas id="chart"></canvas>
+        <canvas id="chartRisk"></canvas>
         <div class="note">Simple canvas chart from <code>/metrics.series_by_day</code>.</div>
       </div>
 
@@ -113,182 +139,372 @@
 
     <div style="height:14px"></div>
 
-    <!-- recent alerts preview (server fills in via /alerts-ui) -->
+    <!-- quick actions -->
     <div class="card">
       <div class="muted" style="margin-bottom:8px;">Quick actions</div>
       <div class="actions">
-        <a class="btn cta" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
+        <a class="btn" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
         <a class="btn" id="analyzeSample">🧪 Analyze sample</a>
         <a class="btn" id="exportCsv">⬇️ Export CSV</a>
+        <button class="btn primary" id="btnLoadDemo" type="button">✨ Load demo data</button>
       </div>
       <div class="note" style="margin-top:8px">
-        These call your API with <code>x-api-key</code>. Save the key or add <code>?key=…</code> to the URL.
+        These call your API with <code>x-api-key</code>. Save the key once in <strong>Connect</strong>.
       </div>
     </div>
 
     <div style="height:14px"></div>
 
-    <!-- last 10 alerts table (client fetch) -->
+    <!-- recent high-risk -->
     <div class="card">
       <div class="muted" style="margin-bottom:8px;">Recent high-risk (preview)</div>
-      <table id="tbl">
+      <table>
         <thead>
           <tr>
             <th>Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th>
           </tr>
         </thead>
-        <tbody id="tbody">
+        <tbody id="tblRecent">
           <tr><td colspan="5" class="muted">loading…</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <script>
-    // ===== helpers: get/save key =====
-    const input  = document.getElementById('apikey');
-    const save   = document.getElementById('saveKey');
-    const status = document.getElementById('status');
+  <!-- Connect / Settings modal -->
+  <div id="connectModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="connectTitle">
+    <div class="modal__scrim" data-close></div>
+    <div class="modal__card">
+      <header class="modal__hdr">
+        <h3 id="connectTitle">Connect to Klerno API</h3>
+        <button class="modal__x" type="button" title="Close" aria-label="Close" data-close>×</button>
+      </header>
 
-    function getKey(){
-      const fromQS = new URLSearchParams(location.search).get('key');
-      if (fromQS) { localStorage.setItem('cw_api_key', fromQS); return fromQS; }
-      return localStorage.getItem('cw_api_key') || '';
+      <div class="modal__body">
+        <label class="frow">
+          <span>x-api-key</span>
+          <input id="inpKey" type="password" placeholder="Paste your API key" autocomplete="off" />
+        </label>
+
+        <div class="grid2small">
+          <label class="frow">
+            <span>Risk threshold</span>
+            <input id="inpThresh" type="number" min="0" max="1" step="0.01" placeholder="0.75" />
+          </label>
+          <label class="frow">
+            <span>Time range (days)</span>
+            <select id="selRange">
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="1">Last 24 hours</option>
+            </select>
+          </label>
+        </div>
+
+        <p class="hint">We’ll save these to your account so they persist across sessions.</p>
+      </div>
+
+      <footer class="modal__ftr">
+        <button class="btn" data-close>Cancel</button>
+        <button id="btnConnect" class="btn primary">Connect</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+  (function(){
+    const $ = sel => document.querySelector(sel);
+
+    const pill = $('#statusPill');
+    const modal = $('#connectModal');
+    const btnConnect = $('#btnConnect');
+    const inpKey = $('#inpKey');
+    const inpThresh = $('#inpThresh');
+    const selRange = $('#selRange');
+    const toasts = $('#toasts');
+
+    const state = {
+      settings: {},
+      connected: false,
+      metrics: null,
+      refreshHandle: null
+    };
+
+    // toasts
+    function toast(msg, ok=true){
+      const el = document.createElement('div');
+      el.className = 'toast ' + (ok ? 'ok' : 'err');
+      el.textContent = msg;
+      toasts.appendChild(el);
+      setTimeout(()=>{ el.remove(); }, 2400);
     }
-    function hdrs(){
-      const k = getKey();
-      const h = { 'Content-Type':'application/json' };
+
+    // modal
+    function openModal(){
+      modal.classList.remove('hidden');
+      modal.querySelector('[data-close]').focus();
+      inpKey.value = ''; // never reveal stored key
+      inpThresh.value = state.settings.risk_threshold ?? '';
+      selRange.value = (state.settings.time_range_days ?? 7).toString();
+      pill.setAttribute('aria-expanded', 'true');
+    }
+    function closeModal(){
+      modal.classList.add('hidden');
+      pill.setAttribute('aria-expanded', 'false');
+    }
+    modal.addEventListener('click', (e) => {
+      if (e.target.matches('[data-close], .modal__scrim')) closeModal();
+    });
+    pill?.addEventListener('click', openModal);
+    document.addEventListener('keydown', (e)=>{
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+    });
+
+    // settings I/O (server)
+    async function loadSettings(){
+      try{
+        const r = await fetch('/me/settings', {credentials:'include'});
+        if(!r.ok) throw 0;
+        state.settings = await r.json();
+      }catch{ state.settings = {}; }
+    }
+    async function saveSettings(patch){
+      const merged = {...state.settings, ...patch};
+      const r = await fetch('/me/settings', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'include',
+        body: JSON.stringify(patch) // merge happens server-side
+      });
+      const j = await r.json().catch(()=> ({}));
+      if(!r.ok || j.ok === false) throw new Error(j.error || 'save failed');
+      state.settings = j.settings || merged;
+      return state.settings;
+    }
+
+    // local helpers (fallback / convenience)
+    const LOCAL_KEY = 'cw_api_key';
+    function readKeyFromLocalOrQS(){
+      const qs = new URLSearchParams(location.search).get('key') || '';
+      const ls = localStorage.getItem(LOCAL_KEY) || '';
+      return (qs || ls).trim();
+    }
+    function persistLocalKey(k){
+      if (k) localStorage.setItem(LOCAL_KEY, k);
+    }
+
+    // header helpers
+    function setPill(connected, subtitle){
+      state.connected = !!connected;
+      pill.classList.toggle('pill--connected', connected);
+      pill.classList.toggle('pill--disconnected', !connected);
+      pill.innerHTML = `<span class="dot" aria-hidden="true"></span> ${connected ? 'Connected' : 'Not connected'}${subtitle? ' • '+subtitle:''}`;
+    }
+    function apiHeaders(){
+      const k = state.settings.x_api_key || '';
+      const h = {};
       if (k) h['x-api-key'] = k;
       return h;
     }
-    function setStatus(msg, ok=true){ status.textContent = msg; status.style.color = ok ? '#9aa9c6' : '#ffa0a0'; }
 
-    input.value = getKey();
-    save.onclick = ()=>{ localStorage.setItem('cw_api_key', (input.value||'').trim()); setStatus('key saved'); load(); };
+    // painters
+    function fmt(n){ return Intl.NumberFormat().format(n); }
+    function paintKPIs(m){
+      const elTotal = document.getElementById('kpiTotal');
+      const elAlerts = document.getElementById('kpiAlerts');
+      const elAvg = document.getElementById('kpiAvg');
 
-    // ===== UI handles =====
-    const kTotal  = document.getElementById('kTotal');
-    const kAlerts = document.getElementById('kAlerts');
-    const kAvg    = document.getElementById('kAvg');
-    const catsDiv = document.getElementById('cats');
-    const tbody   = document.getElementById('tbody');
-    const chartEl = document.getElementById('chart');
+      if (elTotal) elTotal.textContent = fmt(m.total || 0);
+      if (elAlerts) elAlerts.textContent = fmt(m.alerts || 0);
+      if (elAvg) elAvg.textContent = (m.avg_risk ?? 0).toFixed(3);
 
-    // ===== simple line chart (no libs) =====
-    function drawChart(points){
-      const ctx = chartEl.getContext('2d');
-      const w = chartEl.width = chartEl.clientWidth * (window.devicePixelRatio||1);
-      const h = chartEl.height = 220 * (window.devicePixelRatio||1);
-      ctx.clearRect(0,0,w,h);
-
-      if (!points.length){ ctx.fillStyle='#9aa9c6'; ctx.fillText('No data', 10, 20); return; }
-
-      const xs = points.map((p,i)=>i);
-      const ys = points.map(p=>p.avg_risk);
-      const minY = Math.min(...ys), maxY = Math.max(...ys);
-      const pad = 16;
-      const scaleX = (w-2*pad)/(xs.length-1 || 1);
-      const scaleY = (h-2*pad)/((maxY-minY) || 1);
-
-      ctx.strokeStyle = 'rgba(199,210,255,.8)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      xs.forEach((x,i)=>{
-        const px = pad + i*scaleX;
-        const py = h-pad - (ys[i]-minY)*scaleY;
-        i ? ctx.lineTo(px,py) : ctx.moveTo(px,py);
-      });
-      ctx.stroke();
-
-      // dots
-      ctx.fillStyle = 'rgba(255,255,255,.85)';
-      xs.forEach((x,i)=>{
-        const px = pad + i*scaleX;
-        const py = h-pad - (ys[i]-minY)*scaleY;
-        ctx.beginPath(); ctx.arc(px,py,3,0,Math.PI*2); ctx.fill();
-      });
-    }
-
-    // ===== data loaders =====
-    async function loadMetrics(){
-      const r = await fetch('/metrics', { headers: hdrs() });
-      if (!r.ok){ setStatus('metrics: unauthorized', false); throw new Error('metrics unauthorized'); }
-      const j = await r.json();
-      kTotal.textContent  = j.total;
-      kAlerts.textContent = j.alerts;
-      kAvg.textContent    = j.avg_risk.toFixed(3);
+      const s = m.series_by_day || [];
+      const elDelta = document.getElementById('kpiAvgDelta');
+      if (s.length >= 2 && elDelta) {
+        const last = +s[s.length-1].avg_risk || 0;
+        const prev = +s[s.length-2].avg_risk || 0;
+        const delta = (last - prev) / (prev || 1) * 100;
+        elDelta.textContent = ' • ' + (delta>=0? '▲':'▼') + Math.abs(delta).toFixed(1) + '%';
+      } else if (elDelta) {
+        elDelta.textContent = '';
+      }
 
       // categories
-      const cats = Object.entries(j.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
+      const catsDiv = document.getElementById('cats');
+      const cats = Object.entries(m.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
       catsDiv.innerHTML = cats.length
         ? cats.map(([k,v])=>`<span class="tag">${k} · ${v}</span>`).join(' ')
         : '<span class="muted">none</span>';
-
-      drawChart(j.series_by_day || []);
-      setStatus('ok');
     }
 
-    async function loadAlertsPreview(){
+    function paintChart(series){
+      const cv = document.getElementById('chartRisk'); if(!cv) return;
+      const dpr = Math.min(window.devicePixelRatio||1,2);
+      const parent = cv.parentElement;
+      const w = parent.clientWidth, h = 220;
+      cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
+      cv.style.width = w+'px'; cv.style.height = h+'px';
+      const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
+
+      if(!series.length){
+        ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return;
+      }
+      const xs = series.map(d => new Date(d.date).getTime());
+      const ys = series.map(d => +d.avg_risk || 0);
+      const minX=Math.min(...xs), maxX=Math.max(...xs);
+      const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
+      const pad=16, top=10, bottom=28;
+      const iw = w - pad*2, ih = h - top - bottom;
+      const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
+      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+
+      const grad = ctx.createLinearGradient(0, top, 0, top+ih);
+      grad.addColorStop(0,'rgba(123,108,255,.45)'); grad.addColorStop(1,'rgba(123,108,255,0)');
+      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
+      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
+      ctx.lineTo(X(xs[xs.length-1]), top+ih); ctx.lineTo(X(xs[0]), top+ih); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+
+      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
+      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
+      ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
+    }
+
+    async function loadRecentHighRisk(){
+      const r = await fetch('/alerts?limit=50', { headers: apiHeaders() });
+      const tbody = document.getElementById('tblRecent'); if(!tbody) return;
+      if(!r.ok){
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">Unauthorized for alerts preview</td></tr>`;
+        return;
+      }
+      const data = await r.json();
+      const items = (data.items||[]).slice(0,50);
+      if (!items.length){
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map(it=>{
+        const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+        const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+        const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+        const cat= it.category || 'unknown';
+        const risk = Number(it.risk_score ?? it.score ?? 0).toFixed(3);
+        const raw  = Number(it.risk_score ?? it.score ?? 0);
+        const cls  = raw >= (state.settings.risk_threshold || 0.75) ? 'warn' : 'ok';
+        return `<tr>
+          <td>${t}</td>
+          <td>${ft}</td>
+          <td>${amt}</td>
+          <td><span class="tag">${cat}</span></td>
+          <td class="${cls}">${risk}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // metrics + connectivity
+    async function loadMetricsOnce(){
       try{
-        const r = await fetch('/alerts?limit=50', { headers: hdrs() });
-        if (!r.ok){ tbody.innerHTML = `<tr><td colspan="5" class="muted">Unauthorized for alerts preview</td></tr>`; return; }
-        const j = await r.json();
-        const items = (j.items||[]).slice(0,10);
-        if (!items.length){
-          tbody.innerHTML = `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
-          return;
-        }
-        tbody.innerHTML = items.map(it=>{
-          const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
-          const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
-          const amt= `${it.amount} ${(it.symbol||'')}`;
-          const cat= it.category || 'unknown';
-          const risk = Number(it.risk_score||0).toFixed(3);
-          const cls  = (it.risk_score||0) >= 0.75 ? 'warn' : 'ok';
-          return `<tr>
-            <td>${t}</td>
-            <td>${ft}</td>
-            <td>${amt}</td>
-            <td><span class="tag">${cat}</span></td>
-            <td class="${cls}">${risk}</td>
-          </tr>`;
-        }).join('');
-      }catch(e){
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">Couldn’t load alerts preview</td></tr>`;
+        const r = await fetch('/metrics', { headers: apiHeaders() });
+        if(!r.ok) throw 0;
+        const data = await r.json();
+        state.metrics = data;
+        setPill(true, (state.settings.time_range_days||7)+'d');
+        paintKPIs(data);
+        paintChart(data.series_by_day || []);
+        await loadRecentHighRisk();
+      }catch{
+        setPill(false);
       }
     }
 
+    function startAutoRefresh(){
+      if (state.refreshHandle) clearInterval(state.refreshHandle);
+      state.refreshHandle = setInterval(loadMetricsOnce, 15000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) loadMetricsOnce(); });
+    }
+
+    // connect handler
+    btnConnect.addEventListener('click', async ()=>{
+      const patch = {
+        ...(inpKey.value.trim() ? { x_api_key: inpKey.value.trim() } : {}),
+        risk_threshold: inpThresh.value ? +inpThresh.value : undefined,
+        time_range_days: selRange.value ? +selRange.value : undefined
+      };
+      try{
+        const saved = await saveSettings(patch);
+        if (patch.x_api_key) persistLocalKey(patch.x_api_key); // convenience
+        closeModal();
+        toast('Saved ✓');
+        setPill(!!saved.x_api_key, (saved.time_range_days||7)+'d');
+        await loadMetricsOnce();
+      }catch{ toast('Save failed', false); }
+    });
+
     // quick actions
-    document.getElementById('fetchXRPL').onclick = async ()=>{
-      const k = getKey();
-      if (!k) { alert('Save your x-api-key first'); return; }
+    $('#fetchXRPL')?.addEventListener('click', async ()=>{
+      const k = state.settings.x_api_key || '';
+      if (!k) { toast('Save your x-api-key first', false); return; }
       const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
       if (!acct) return;
       const url = `/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
-      const r = await fetch(url, { method:'POST', headers: hdrs() });
-      alert(r.ok ? 'Fetched & saved' : 'Failed (check server logs)');
-      loadMetrics(); loadAlertsPreview();
-    };
-
-    document.getElementById('analyzeSample').onclick = async ()=>{
-      const r = await fetch('/analyze/sample', { method:'POST', headers: hdrs() });
-      alert(r.ok ? 'Sample analyzed' : 'Failed (check server logs)');
-      loadMetrics(); loadAlertsPreview();
-    };
-
-    document.getElementById('exportCsv').onclick = ()=>{
-      const k = getKey();
+      const r = await fetch(url, { method:'POST', headers: apiHeaders() });
+      toast(r.ok ? 'Fetched & saved ✓' : 'Fetch failed', r.ok);
+      await loadMetricsOnce();
+    });
+    $('#analyzeSample')?.addEventListener('click', async ()=>{
+      const r = await fetch('/analyze/sample', { method:'POST', headers: apiHeaders() });
+      toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok);
+      await loadMetricsOnce();
+    });
+    $('#exportCsv')?.addEventListener('click', ()=>{
+      const k = state.settings.x_api_key || '';
       const url = k ? `/export/csv/download?key=${encodeURIComponent(k)}` : '/export/csv/download';
       window.open(url, '_blank');
-    };
+    });
+    $('#btnLoadDemo')?.addEventListener('click', async ()=>{
+      try{
+        const r = await fetch('/analyze/sample', { method:'POST', headers: apiHeaders() });
+        if(!r.ok) throw 0;
+        toast('Demo data loaded ✓');
+        await loadMetricsOnce();
+      }catch{ toast('Could not load demo data', false); }
+    });
 
-    async function load(){ await loadMetrics(); await loadAlertsPreview(); }
-    // === live refresh ===
-    load();
-    setInterval(load, 15000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+    // boot
+    (async function boot(){
+      await loadSettings();
 
-    // === animated background script (added) ===
+      // If no server key, fall back to ?key= or localStorage and persist
+      if (!state.settings.x_api_key) {
+        const candidate = readKeyFromLocalOrQS();
+        if (candidate) {
+          try {
+            await saveSettings({ x_api_key: candidate });
+            persistLocalKey(candidate);
+          } catch {}
+        }
+      }
+
+      // NEW: auto-open Connect modal if still no key after fallback
+      if (!state.settings.x_api_key) {
+        setPill(false);
+        openModal();
+        toast('Add your API key to connect');
+      } else {
+        setPill(true, (state.settings.time_range_days||7)+'d');
+        await loadMetricsOnce();
+      }
+
+      startAutoRefresh();
+    })();
+  })();
+  </script>
+
+  <!-- background animation (unchanged) -->
+  <script>
     (function(){
       const bg = document.getElementById('bg');
       if(!bg) return;
