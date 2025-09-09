@@ -167,6 +167,20 @@ app.include_router(admin_router)
 # Init DB
 store.init_db()
 
+# --- Bootstrap single admin account (email/password) ---
+BOOT_ADMIN_EMAIL = "klerno@outlook.com".lower().strip()
+BOOT_ADMIN_PASSWORD = "Labs2025"
+
+existing = store.get_user_by_email(BOOT_ADMIN_EMAIL)
+if not existing:
+    # create the admin with an active subscription so UI gates pass
+    store.create_user(
+        BOOT_ADMIN_EMAIL,
+        hash_pw(BOOT_ADMIN_PASSWORD),
+        role="admin",
+        subscription_active=True,
+    )
+
 # ---- Live push hub (WebSocket) ----------------------------------------------
 class LiveHub:
     """In-process pub/sub for real-time pushes."""
