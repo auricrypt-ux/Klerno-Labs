@@ -758,6 +758,16 @@ async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(req
         "emails": emails,
     }
 
+# Recent items for the dashboard (optionally only alerts)
+@app.get("/uiapi/recent", include_in_schema=False)
+def ui_recent(limit: int = 50, only_alerts: bool = False, user=Depends(require_paid_or_admin)):
+    if only_alerts:
+        thr = float(os.getenv("RISK_THRESHOLD", "0.75"))
+        rows = store.list_alerts(threshold=thr, limit=limit)
+    else:
+        rows = store.list_all(limit=limit)
+    return {"items": rows}
+
 
 # ---------------- UI: Dashboard & Alerts ----------------
 @app.get("/dashboard", name="ui_dashboard", include_in_schema=False)

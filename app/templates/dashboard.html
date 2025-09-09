@@ -19,7 +19,6 @@
       -webkit-tap-highlight-color:transparent;
     }
 
-    /* background */
     canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
     .vignette{
       position:fixed; inset:0; z-index:1; pointer-events:none;
@@ -27,7 +26,6 @@
       mix-blend-mode:multiply;
     }
 
-    /* top header */
     header{
       position:sticky; top:0; z-index:40;
       backdrop-filter:saturate(140%) blur(8px);
@@ -46,7 +44,6 @@
     .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
     .btn:focus-visible{ outline:none; box-shadow:var(--focus) }
 
-    /* TOP TABS */
     .tabsbar{
       position:sticky; top:56px; z-index:35; border-bottom:1px solid var(--line);
       background:rgba(0,0,0,.25); backdrop-filter: blur(6px);
@@ -65,7 +62,6 @@
     .tab--admin{ display:none }
     body[data-role="admin"] .tab--admin{ display:inline-flex }
 
-    /* content */
     main{ max-width:1100px; margin:0 auto; padding:var(--gap); position:relative; z-index:2 }
     .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px}
     .row{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0}
@@ -73,7 +69,15 @@
     .kpi{font-size:28px; font-weight:700; letter-spacing:-.02em}
     .muted{color:var(--muted)}
     .actions{display:flex; gap:10px; flex-wrap:wrap}
-    .grid2{display:grid; grid-template-columns:2fr 1fr; gap:14px}
+
+    /* FIX: keep the right card stable and prevent canvas from pushing it */
+    .grid2{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) 280px; /* left grows, right fixed */
+      gap:14px; align-items:start;
+    }
+    .grid2 > .card{ min-width:0; } /* allow canvas to shrink inside grid */
+
     @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
     canvas{width:100%; height:220px; display:block}
     table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden}
@@ -84,21 +88,11 @@
     .ok{color:var(--good)} .warn{color:var(--warn)}
     .note{font-size:12px; color:var(--muted)}
 
-    /* toasts */
     .toasts{position:fixed; right:16px; bottom:16px; display:grid; gap:8px; z-index:70}
     .toast{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:rgba(0,0,0,.6); color:#fff; max-width:min(90vw,360px)}
     .toast.ok{border-color:rgba(52,211,153,.4)}
     .toast.err{border-color:rgba(239,68,68,.5)}
     .toast.warn{border-color:rgba(255,169,64,.5)}
-
-    /* watchlist UI (Create) */
-    .watchlist{display:grid; gap:10px}
-    .watchlist form{display:flex; gap:8px; flex-wrap:wrap}
-    .watchlist input[type=text]{flex:1; min-width:260px; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0f1630; color:var(--ink)}
-    .items{display:grid; gap:8px}
-    .item{display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:#0f1630}
-    .item .addr{font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px}
-    .item .sp{flex:1}
   </style>
 </head>
 <body data-role="" data-active="">
@@ -111,11 +105,10 @@
         <img class="wordmark" src="{{ url_path_for('static', path='klerno-wordmark.png') }}" alt="Klerno Labs">
       </a>
       <div class="spacer"></div>
-      <!-- header buttons removed per request -->
+      <!-- header actions removed per request -->
     </div>
   </header>
 
-  <!-- TOP TABS -->
   <div class="tabsbar">
     <nav id="tabs" class="tabs" role="tablist" aria-label="Primary">
       <button id="tab-home"    class="tab" role="tab" aria-controls="panel-home"    aria-selected="false" tabindex="-1">Home</button>
@@ -138,9 +131,7 @@
 
       <div class="grid2">
         <div class="card">
-          <div class="muted" style="margin-bottom:8px;">
-            Average risk by day
-          </div>
+          <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
           <canvas id="chartRisk"></canvas>
           <div class="note">Simple canvas chart from <code>/metrics-ui.series_by_day</code>.</div>
         </div>
@@ -166,16 +157,15 @@
       <div style="height:14px"></div>
 
       <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px; margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
           <div class="muted">Recent high-risk (live)</div>
-          <label class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px">
-            <input id="toggleOnlyHigh" type="checkbox" checked>
-            Only ≥ threshold
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px">
+            <input id="onlyThresh" type="checkbox" checked> Only ≥ threshold
           </label>
         </div>
         <table>
           <thead><tr><th>Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th></tr></thead>
-          <tbody id="tblRecent"><tr><td colspan="5" class="muted">No alerts yet</td></tr></tbody>
+          <tbody id="tblRecent"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -183,31 +173,20 @@
     <!-- EXPLORE -->
     <section id="panel-explore" role="tabpanel" aria-labelledby="tab-explore" hidden>
       <div class="card" style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <h2 style="margin:0">Explore</h2>
-        </div>
+        <h2 style="margin:0">Explore</h2>
         <p class="muted" style="margin:8px 0 0">Coming soon.</p>
       </div>
     </section>
 
-    <!-- CREATE -->
+    <!-- CREATE (Saved wallets) -->
     <section id="panel-create" role="tabpanel" aria-labelledby="tab-create" hidden>
-      <div class="card watchlist" style="margin-bottom:14px">
-        <h2 style="margin:0">Wallet watchlist</h2>
-        <form id="walletForm">
-          <input id="walletInput" type="text" placeholder="Add XRPL address (e.g. rEb8TK3gBgk5…)" autocomplete="off">
-          <button class="btn" type="submit">Add</button>
-          <button class="btn ghost" id="btnStartWatch" type="button">Start live watch</button>
-          <button class="btn ghost" id="btnStopWatch" type="button">Stop</button>
-        </form>
-        <div id="walletItems" class="items"></div>
-        <div class="note">Saved to this browser only. Selected wallets will be watched in real time.</div>
-      </div>
-
       <div class="card">
-        <h3 style="margin:0 0 8px 0">Actions</h3>
-        <div class="note" style="margin-bottom:8px">Fetch recent transactions for any saved wallet (persists & updates live).</div>
-        <div id="walletActions" class="items"></div>
+        <h2 style="margin:0 0 8px 0">Saved wallets</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <input id="walletInput" placeholder="rEb8TK3gBgk5..." style="flex:1;min-width:240px;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0f1630;color:#e8ecf3">
+          <button class="btn" id="btnAddWallet" type="button">＋ Save</button>
+        </div>
+        <div id="walletList" class="muted">No wallets yet.</div>
       </div>
     </section>
 
@@ -237,28 +216,25 @@
     </section>
   </main>
 
-  <!-- Toasts -->
   <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
 
   <script>
   (function(){
-    const $ = (s, r=document) => r.querySelector(s);
+    const $  = (s, r=document) => r.querySelector(s);
     const $$ = (s, r=document) => [...r.querySelectorAll(s)];
     const toasts = $('#toasts');
     const body = document.body;
     const tabs = $$('#tabs [role="tab"]');
     const panels = $$('[role="tabpanel"]');
 
-    // -------- Toasts
     function toast(msg, type='ok', ms=2400){
       const el = document.createElement('div');
       el.className = 'toast ' + type;
       el.textContent = msg;
       toasts.appendChild(el);
-      setTimeout(()=>{ el.remove(); }, ms);
+      setTimeout(()=> el.remove(), ms);
     }
 
-    // -------- /me -> role controls Admin visibility
     async function loadMe(){
       try{
         const r = await fetch('/me', {credentials:'include'});
@@ -266,11 +242,10 @@
         const me = await r.json();
         body.dataset.role = (me.role || 'viewer');
         $('#meEmail') && ($('#meEmail').textContent = me.email || '—');
-        $('#meRole') && ($('#meRole').textContent = me.role || '—');
+        $('#meRole')  && ($('#meRole').textContent = me.role  || '—');
       }catch{ body.dataset.role=''; }
     }
 
-    // ======== Metrics & Chart ========
     function fmt(n){ return Intl.NumberFormat().format(n); }
     function paintKPIs(m){
       $('#kpiTotal').textContent = fmt(m.total || 0);
@@ -300,7 +275,8 @@
       const w = parent.clientWidth, h = 220;
       cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
       cv.style.width = w+'px'; cv.style.height = h+'px';
-      const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
+      const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,w,h);
       if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
       const xs = series.map(d => new Date(d.date).getTime());
       const ys = series.map(d => +d.avg_risk || 0);
@@ -321,180 +297,101 @@
       ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
     }
 
-    async function loadMetricsOnce(){
-      try{
-        // ask for 365 days so older sample data shows on the chart
-        const r = await fetch(`/metrics-ui?days=365`, { credentials:'include' });
-        if(!r.ok) throw 0;
-        const data = await r.json();
-        paintKPIs(data);
-        paintChart(data.series_by_day || []);
-      }catch{ /* leave skeletons */ }
+    // --- Recent table (alerts OR all)
+    const dedupe = new Set(); // tx_id or composite key
+    function keyFor(it){ return it.tx_id || `${it.timestamp}|${it.from_addr}|${it.to_addr}|${it.amount}`; }
+    function passesFilter(it){
+      const thr = 0.75;
+      const risk = Number(it.risk_score ?? it.score ?? 0);
+      return !$('#onlyThresh').checked || risk >= thr;
     }
-
-    // ======== Live feed (WebSocket) ========
-    const tbl = $('#tblRecent');
-    const onlyHighEl = $('#toggleOnlyHigh');
-    let ws = null;
-    let recentRows = []; // keep latest rows we rendered
-
-    function riskOf(it){ return Number(it.risk_score ?? it.score ?? 0); }
-
-    function renderRecent(){
-      if(!tbl) return;
-      if(!recentRows.length){
-        tbl.innerHTML = `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
-        return;
+    function formatRow(it){
+      const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+      const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+      const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+      const cat= it.category || 'unknown';
+      const risk = Number(it.risk_score ?? it.score ?? 0);
+      const cls  = risk >= 0.75 ? 'warn' : 'ok';
+      return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${risk.toFixed(3)}</td></tr>`;
+    }
+    function renderRows(items){
+      const tbody = $('#tblRecent');
+      const rows = [];
+      dedupe.clear();
+      for(const it of items){
+        const k = keyFor(it);
+        if(dedupe.has(k)) continue;
+        dedupe.add(k);
+        if(passesFilter(it)) rows.push(formatRow(it));
       }
-      tbl.innerHTML = recentRows.map(it=>{
-        const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
-        const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
-        const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
-        const cat= it.category || 'unknown';
-        const risk= riskOf(it);
-        const cls = risk >= 0.75 ? 'warn' : 'ok';
-        return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${risk.toFixed(3)}</td></tr>`;
-      }).join('');
+      tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
     }
-
-    function pushIncoming(it){
-      const onlyHigh = !!onlyHighEl?.checked;
-      if(onlyHigh && riskOf(it) < 0.75) return;
-      // first row clears placeholder
-      if(!recentRows.length && tbl) tbl.innerHTML = '';
-      recentRows.unshift(it);
-      if(recentRows.length > 50) recentRows.length = 50;
-      renderRecent();
+    async function loadRecent(){
+      const only = $('#onlyThresh').checked ? 'true' : 'false';
+      const url = $('#onlyThresh').checked ? `/alerts-ui/data?limit=50`
+                                           : `/uiapi/recent?limit=50&only_alerts=${only}`;
+      const r = await fetch(url, {credentials:'include'});
+      if(!r.ok) return;
+      const data = await r.json();
+      const items = (data.items || data || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+      renderRows(items);
     }
+    $('#onlyThresh').addEventListener('change', loadRecent);
 
+    // --- WebSocket live insert
     function connectWS(){
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const url = `${proto}://${location.host}/ws/alerts`;
       try{
-        ws = new WebSocket(url);
-      }catch(e){
-        toast('WebSocket failed to initialize', 'err'); return;
-      }
-      ws.addEventListener('open', ()=>{ sendWatch(); });
-      ws.addEventListener('message', (ev)=>{
-        try{
-          const msg = JSON.parse(ev.data||'{}');
-          if(msg.type === 'tx' && msg.item){ pushIncoming(msg.item); }
-        }catch{}
-      });
-      ws.addEventListener('close', ()=>{ setTimeout(connectWS, 1500); });
-      ws.addEventListener('error', ()=>{ try{ ws.close(); }catch{} });
+        const wsUrl = (location.protocol==='https:'?'wss':'ws') + '://' + location.host + '/ws/alerts';
+        const ws = new WebSocket(wsUrl);
+        ws.onopen = ()=> ws.send(JSON.stringify({ping: Date.now()}));
+        ws.onmessage = (ev)=>{
+          try{
+            const msg = JSON.parse(ev.data||'{}');
+            if(msg.type==='tx' && msg.item){
+              const it = msg.item;
+              const k = keyFor(it);
+              if(!dedupe.has(k) && passesFilter(it)){
+                dedupe.add(k);
+                const tbody = $('#tblRecent');
+                const row = document.createElement('tr');
+                row.innerHTML = formatRow(it).replace(/^<tr>|<\/tr>$/g,'');
+                if (tbody.firstElementChild && tbody.firstElementChild.children.length===5) {
+                  tbody.insertBefore(row, tbody.firstElementChild);
+                } else {
+                  tbody.innerHTML = ''; tbody.appendChild(row);
+                }
+                while(tbody.children.length > 50) tbody.lastElementChild.remove();
+              }
+            }
+          }catch{}
+        };
+        ws.onclose = ()=> setTimeout(connectWS, 1500);
+        ws.onerror = ()=> ws.close();
+      }catch{}
     }
 
-    // ======== Watchlist (Create tab) ========
-    const LS_KEY = 'klerno.watchlist.v1';
-    function getWatchlist(){ try{ return JSON.parse(localStorage.getItem(LS_KEY)||'[]'); }catch{ return []; } }
-    function setWatchlist(list){ localStorage.setItem(LS_KEY, JSON.stringify(list)); renderWatchlist(); renderWalletActions(); sendWatch(); }
-
-    function renderWatchlist(){
-      const items = getWatchlist();
-      const wrap = $('#walletItems'); if(!wrap) return;
-      if(!items.length){ wrap.innerHTML = `<div class="note">No wallets saved yet.</div>`; return; }
-      wrap.innerHTML = items.map((o,i)=>`
-        <div class="item">
-          <input type="checkbox" data-idx="${i}" ${o.watch? 'checked':''} title="Watch live">
-          <span class="addr">${o.addr}</span>
-          <span class="sp"></span>
-          <button class="btn ghost" data-act="fetch" data-idx="${i}" title="Fetch recent">Fetch</button>
-          <button class="btn ghost" data-act="remove" data-idx="${i}" title="Remove">✕</button>
-        </div>
-      `).join('');
-    }
-
-    function renderWalletActions(){
-      const items = getWatchlist();
-      const wrap = $('#walletActions'); if(!wrap) return;
-      if(!items.length){ wrap.innerHTML = `<div class="note">Add wallets above to enable actions.</div>`; return; }
-      wrap.innerHTML = items.map((o,i)=>`
-        <div class="item">
-          <span class="addr">${o.addr}</span>
-          <span class="sp"></span>
-          <button class="btn" data-act="fetch" data-idx="${i}">Fetch recent</button>
-        </div>
-      `).join('');
-    }
-
-    function sendWatch(){
-      const items = getWatchlist();
-      const watching = items.filter(o=>o.watch).map(o=>o.addr);
-      if(ws && ws.readyState === 1){
-        ws.send(JSON.stringify({watch: watching}));
-      }
-    }
-
-    // Add wallet
-    $('#walletForm')?.addEventListener('submit', (e)=>{
-      e.preventDefault();
-      const inp = $('#walletInput');
-      const v = (inp.value||'').trim();
-      if(!v){ inp.focus(); return; }
-      const items = getWatchlist();
-      if(items.some(o=>o.addr.toLowerCase()===v.toLowerCase())){ toast('Already saved', 'warn'); return; }
-      items.push({addr:v, watch:true});
-      setWatchlist(items);
-      inp.value='';
-      toast('Wallet saved & watching ✓');
-    });
-
-    // Toggle watch / remove / fetch
-    $('#panel-create')?.addEventListener('click', async (e)=>{
-      const btn = e.target.closest('button');
-      const ck  = e.target.closest('input[type=checkbox]');
-      if(ck && ck.dataset.idx){
-        const items = getWatchlist();
-        const i = +ck.dataset.idx;
-        if(items[i]){ items[i].watch = ck.checked; setWatchlist(items); toast(ck.checked?'Watching':'Stopped', 'ok'); }
-        return;
-      }
-      if(!btn) return;
-      const idx = +btn.dataset.idx;
-      const act = btn.dataset.act;
-      const items = getWatchlist();
-      const it = items[idx];
-      if(act==='remove'){
-        items.splice(idx,1); setWatchlist(items); toast('Removed');
-      }else if(act==='fetch' && it){
-        await fetchRecent(it.addr);
-      }
-    });
-
-    $('#btnStartWatch')?.addEventListener('click', ()=>{ sendWatch(); toast('Live watch started'); });
-    $('#btnStopWatch')?.addEventListener('click', ()=>{ if(ws) try{ ws.close(); }catch{}; toast('Live watch stopped','warn'); });
-
-    async function fetchRecent(addr){
-      const url = `/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(addr)}&limit=10`;
-      try{
-        const r = await fetch(url, { method:'POST', credentials:'include' });
-        if(!r.ok){
-          const t = await r.text().catch(()=> '');
-          toast(`Fetch failed (${r.status}) ${t.slice(0,100)}`, 'err', 5000);
-        }else{
-          toast('Fetched & saved ✓');
-          await loadMetricsOnce();
-        }
-      }catch(e){ toast(`Fetch error: ${e?.message||e}`, 'err', 5000); }
-    }
-
-    // ======== “Quick actions” (Home) ========
+    // --- Actions
     $('#fetchXRPL')?.addEventListener('click', async ()=>{
       const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
       if (!acct) return;
-      await fetchRecent(acct);
+      const url = `/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
+      try{
+        const r = await fetch(url, { method:'POST', credentials:'include' });
+        if(!r.ok){
+          const text = await r.text().catch(()=> '');
+          toast(`Fetch failed (${r.status}) ${text.slice(0,120)}`, 'err', 5000);
+        } else {
+          toast('Fetched & saved ✓');
+          await loadMetricsOnce(); await loadRecent();
+        }
+      }catch(e){ toast(`Fetch error: ${e?.message||e}`, 'err', 5000); }
     });
-
     $('#analyzeSample')?.addEventListener('click', async ()=>{
       const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
       toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok ? 'ok' : 'err');
-      await loadMetricsOnce();
+      await loadMetricsOnce(); await loadRecent();
     });
-
     $('#exportCsv')?.addEventListener('click', ()=>{ window.open('/uiapi/export/csv/download', '_blank'); });
-
     $('#btnLoadDemo')?.addEventListener('click', async ()=>{
       try{
         const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
@@ -503,12 +400,78 @@
           toast(`Could not load demo data (${r.status}) ${t.slice(0,120)}`, 'err', 5000);
         } else {
           toast('Demo data loaded ✓');
-          await loadMetricsOnce();
+          await loadMetricsOnce(); await loadRecent();
         }
       }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
     });
 
-    // ======== Tabs + router
+    // Saved wallets (Create tab) --------------------------------------------
+    async function loadWalletPrefs(){
+      try{
+        const r = await fetch('/me/settings', {credentials:'include'});
+        if(!r.ok) return {saved_wallets:[]};
+        const s = await r.json();
+        return s.ui_prefs || {saved_wallets:[]};
+      }catch{ return {saved_wallets:[]}; }
+    }
+    async function saveWalletPrefs(prefs){
+      await fetch('/me/settings', {
+        method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ui_prefs: prefs })
+      });
+    }
+    async function refreshWalletList(){
+      const prefs = await loadWalletPrefs();
+      const list = prefs.saved_wallets || [];
+      const el = $('#walletList');
+      if(!list.length){ el.innerHTML = 'No wallets yet.'; return; }
+      el.innerHTML = list.map(a => `
+        <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
+          <code style="flex:1">${a}</code>
+          <button class="btn" data-act="fetch" data-acct="${a}">Fetch live</button>
+          <button class="btn" data-act="remove" data-acct="${a}">Remove</button>
+        </div>
+      `).join('');
+      el.querySelectorAll('button').forEach(b=>{
+        b.onclick = async (e)=>{
+          const acct = e.currentTarget.dataset.acct;
+          if(e.currentTarget.dataset.act === 'fetch'){
+            const r = await fetch(`/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`, {method:'POST', credentials:'include'});
+            toast(r.ok ? `Fetched ${acct} ✓` : `Fetch failed for ${acct}`, r.ok ? 'ok':'err');
+            await loadMetricsOnce(); await loadRecent();
+          }else{
+            const prefs2 = await loadWalletPrefs();
+            prefs2.saved_wallets = (prefs2.saved_wallets||[]).filter(x=>x!==acct);
+            await saveWalletPrefs(prefs2);
+            refreshWalletList();
+          }
+        };
+      });
+      $('#btnAddWallet').onclick = async ()=>{
+        const a = ($('#walletInput').value||'').trim();
+        if(!a) return;
+        const prefs2 = await loadWalletPrefs();
+        const set = new Set(prefs2.saved_wallets||[]);
+        set.add(a);
+        prefs2.saved_wallets = [...set];
+        await saveWalletPrefs(prefs2);
+        $('#walletInput').value='';
+        refreshWalletList();
+      };
+    }
+    // -----------------------------------------------------------------------
+
+    async function loadMetricsOnce(){
+      try{
+        const r = await fetch(`/metrics-ui?days=7`, { credentials:'include' });
+        if(!r.ok) throw 0;
+        const data = await r.json();
+        paintKPIs(data);
+        paintChart(data.series_by_day || []);
+      }catch{}
+    }
+
     function setSelected(tab){
       const target = tab.getAttribute('aria-controls');
       tabs.forEach(t=>{ const sel = (t===tab); t.setAttribute('aria-selected', sel); t.tabIndex = sel ? 0 : -1; });
@@ -535,18 +498,17 @@
     }
     window.addEventListener('hashchange', routeFromHash);
 
-    // ======== Boot
     (async function boot(){
       await loadMe();
-      renderWatchlist(); renderWalletActions();
-      connectWS();
       await loadMetricsOnce();
+      await loadRecent();
+      await refreshWalletList();
+      connectWS();                                    // live updates
+      setInterval(()=>{ if(!document.hidden){ loadMetricsOnce(); loadRecent(); } }, 5000); // faster refresh
       routeFromHash();
-      // Faster auto refresh (3 seconds) — metrics only; live rows come via WS
-      setInterval(()=>{ if(!document.hidden) loadMetricsOnce(); }, 3000);
     })();
 
-    // Background animation (unchanged)
+    // background animation (unchanged)
     (function(){
       const bg = document.getElementById('bg'); if(!bg) return;
       const ctx = bg.getContext('2d');
