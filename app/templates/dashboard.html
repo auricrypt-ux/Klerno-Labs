@@ -357,6 +357,73 @@
       }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
     });
 
+    // --- LIVE: WebSocket push for instant updates
+    let ws;
+    function connectLive(){
+      try{
+        const proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${location.host}/ws/alerts`);
+        ws.onopen = () => { /* optional: ws.send(JSON.stringify({watch: []})) */ };
+        ws.onmessage = (ev) => {
+          try{
+            const msg = JSON.parse(ev.data||'{}');
+            if (msg.type === 'tx' && msg.item) onNewTx(msg.item);
+          }catch{/* ignore bad frames */}
+        };
+        ws.onclose = () => setTimeout(connectLive, 1500);
+        ws.onerror = () => { try{ ws.close(); }catch{} };
+      }catch{ setTimeout(connectLive, 2000); }
+    }
+
+    function onNewTx(it){
+      // optimistic, instant UI nudge
+      const thr = 0.75;
+      const totalEl = $('#kpiTotal');
+      const alertsEl = $('#kpiAlerts');
+      if (totalEl){
+        const cur = parseInt((totalEl.textContent||'0').replace(/[^\d]/g,''))||0;
+        totalEl.textContent = Intl.NumberFormat().format(cur+1);
+      }
+      const riskVal = Number(it.risk_score ?? it.score ?? 0);
+      if (alertsEl && riskVal >= thr){
+        const curA = parseInt((alertsEl.textContent||'0').replace(/[^\d]/g,''))||0;
+        alertsEl.textContent = Intl.NumberFormat().format(curA+1);
+      }
+
+      // prepend to "Recent high-risk" table if above threshold
+      if (riskVal >= thr){
+        const tbody = $('#tblRecent');
+        if (tbody){
+          const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+          const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+          const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+          const cat= it.category || 'unknown';
+          const risk = riskVal.toFixed(3);
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="warn">${risk}</td>`;
+          // remove "loading…" row if present
+          if (tbody.firstElementChild && tbody.firstElementChild.children.length === 1){
+            tbody.innerHTML = '';
+          }
+          tbody.prepend(row);
+          // keep to 50
+          while (tbody.children.length > 50) tbody.lastElementChild.remove();
+        }
+      }
+
+      // fetch authoritative metrics to refresh chart/categories precisely (debounced)
+      scheduleMetricsRefresh();
+    }
+
+    let refreshTimer = null;
+    function scheduleMetricsRefresh(){
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(async ()=>{
+        refreshTimer = null;
+        await loadMetricsOnce();
+      }, 400);
+    }
+
     // --- Tabs + router
     function setSelected(tab){
       const target = tab.getAttribute('aria-controls');
@@ -389,6 +456,7 @@
       await loadMe();
       await loadMetricsOnce();
       routeFromHash();
+      connectLive(); // <—— LIVE push
       // Auto refresh (only when visible)
       setInterval(()=>{ if(!document.hidden) loadMetricsOnce(); }, 15000);
     })();
