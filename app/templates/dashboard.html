@@ -83,6 +83,13 @@
     .tag{padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#cfe1ff}
     .ok{color:var(--good)} .warn{color:var(--warn)}
     .note{font-size:12px; color:var(--muted)}
+
+    /* toasts */
+    .toasts{position:fixed; right:16px; bottom:16px; display:grid; gap:8px; z-index:70}
+    .toast{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:rgba(0,0,0,.6); color:#fff; max-width:min(90vw,360px)}
+    .toast.ok{border-color:rgba(52,211,153,.4)}
+    .toast.err{border-color:rgba(239,68,68,.5)}
+    .toast.warn{border-color:rgba(255,169,64,.5)}
   </style>
 </head>
 <body data-role="" data-active="">
@@ -95,9 +102,7 @@
         <img class="wordmark" src="{{ url_path_for('static', path='klerno-wordmark.png') }}" alt="Klerno Labs">
       </a>
       <div class="spacer"></div>
-      <!-- Keep Alerts + Profile in header; API moved to Admin, Connect removed -->
-      <a class="btn" href="/alerts-ui">🚨 Alerts</a>
-      <button id="profileBtn" class="btn" type="button" onclick="location.hash='#profile'">Profile</button>
+      <!-- Removed Alerts & Profile header buttons per request -->
     </div>
   </header>
 
@@ -200,7 +205,7 @@
   </main>
 
   <!-- Toasts -->
-  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true" style="position:fixed; right:16px; bottom:16px; display:grid; gap:8px; z-index:70"></div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
 
   <script>
   (function(){
@@ -215,7 +220,6 @@
     function toast(msg, type='ok', ms=2400){
       const el = document.createElement('div');
       el.className = 'toast ' + type;
-      el.style.cssText = 'padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.6);color:#fff;max-width:min(90vw,360px)';
       el.textContent = msg;
       toasts.appendChild(el);
       setTimeout(()=>{ el.remove(); }, ms);
@@ -239,6 +243,7 @@
       $('#kpiTotal').textContent = fmt(m.total || 0);
       $('#kpiAlerts').textContent = fmt(m.alerts || 0);
       $('#kpiAvg').textContent = (m.avg_risk ?? 0).toFixed(3);
+
       const s = m.series_by_day || [];
       const elDelta = $('#kpiAvgDelta');
       if (s.length >= 2 && elDelta) {
@@ -247,6 +252,7 @@
         const delta = (last - prev) / (prev || 1) * 100;
         elDelta.textContent = ' • ' + (delta>=0? '▲':'▼') + Math.abs(delta).toFixed(1) + '%';
       } else if (elDelta) elDelta.textContent = '';
+
       const catsDiv = $('#cats');
       if (catsDiv){
         const cats = Object.entries(m.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
@@ -314,14 +320,23 @@
       }catch{ /* leave skeletons */ }
     }
 
-    // --- Quick actions
+    // --- Quick actions (improved error toast)
     $('#fetchXRPL')?.addEventListener('click', async ()=>{
       const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
       if (!acct) return;
       const url = `/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
-      const r = await fetch(url, { method:'POST', credentials:'include' });
-      toast(r.ok ? 'Fetched & saved ✓' : 'Fetch failed', r.ok ? 'ok' : 'err');
-      await loadMetricsOnce();
+      try{
+        const r = await fetch(url, { method:'POST', credentials:'include' });
+        if(!r.ok){
+          const text = await r.text().catch(()=> '');
+          toast(`Fetch failed (${r.status}) ${text.slice(0,120)}`, 'err', 5000);
+        } else {
+          toast('Fetched & saved ✓');
+          await loadMetricsOnce();
+        }
+      }catch(e){
+        toast(`Fetch error: ${e?.message||e}`, 'err', 5000);
+      }
     });
     $('#analyzeSample')?.addEventListener('click', async ()=>{
       const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
@@ -330,9 +345,16 @@
     });
     $('#exportCsv')?.addEventListener('click', ()=>{ window.open('/uiapi/export/csv/download', '_blank'); });
     $('#btnLoadDemo')?.addEventListener('click', async ()=>{
-      const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
-      toast(r.ok ? 'Demo data loaded ✓' : 'Could not load demo data', r.ok ? 'ok' : 'err');
-      await loadMetricsOnce();
+      try{
+        const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
+        if(!r.ok){
+          const t = await r.text().catch(()=> '');
+          toast(`Could not load demo data (${r.status}) ${t.slice(0,120)}`, 'err', 5000);
+        } else {
+          toast('Demo data loaded ✓');
+          await loadMetricsOnce();
+        }
+      }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
     });
 
     // --- Tabs + router
