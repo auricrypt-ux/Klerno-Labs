@@ -14,6 +14,8 @@ from . import store
 from .deps import require_user
 from .guardian import score_risk
 from .compliance import tag_category
+from pydantic import BaseModel, EmailStr
+
 
 # Optional email (SendGrid) — same envs your app already uses
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
