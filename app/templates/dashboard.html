@@ -336,7 +336,8 @@
         ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return;
       }
       const xs = series.map(d => new Date(d.date).getTime());
-      const ys = series.map(d => +d.avg_risk || 0);
+      theY = series.map(d => +d.avg_risk || 0);
+      const ys = theY;
       const minX=Math.min(...xs), maxX=Math.max(...xs);
       const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
       const pad=16, top=10, bottom=28;
@@ -455,7 +456,7 @@
     // boot
     (async function boot(){
       await loadSettings();
-      await loadMetricsOnce();   // (Number 1) removed the early setPill here
+      await loadMetricsOnce();   // only set "Connected" after successful fetch
       startAutoRefresh();
     })();
   })();
