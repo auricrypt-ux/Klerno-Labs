@@ -119,13 +119,9 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 templates.env.globals["url_path_for"] = app.url_path_for
-# EDIT: dev-speed – always pick up template changes
-templates.env.auto_reload = True
-templates.env.cache = {}
 
 # Config flags for UI auth redirects
-# EDIT: Lock the only admin account to this email (env can override, but default is exactly this)
-ADMIN_EMAIL = (os.getenv("ADMIN_EMAIL") or "klerno@outlook.com").strip().lower()
+ADMIN_EMAIL = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
 # ---- Session cookie config (fix dev/HTTPS login) ----
@@ -170,23 +166,6 @@ app.include_router(admin_router)
 
 # Init DB
 store.init_db()
-
-# EDIT: Seed the ONLY admin account on startup (idempotent)
-@app.on_event("startup")
-def ensure_admin_account():
-    email = ADMIN_EMAIL
-    user = store.get_user_by_email(email)
-    if not user:
-        store.create_user(
-            email,
-            hash_pw("Labs2025"),  # seed password
-            role="admin",
-            subscription_active=True,
-        )
-    else:
-        # If it exists, we leave it as-is; your /me and tokens below enforce admin-only.
-        pass
-
 
 # ---- Live push hub (WebSocket) ----------------------------------------------
 class LiveHub:
@@ -325,12 +304,11 @@ def login_submit(request: Request, email: str = Form(...), password: str = Form(
     user = store.get_user_by_email(e)
     if not user or not verify_pw(password, user["password_hash"]):
         return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"}, status_code=400)
-    # EDIT: Force role in token: only ADMIN_EMAIL can be admin
-    role = "admin" if e == ADMIN_EMAIL else "viewer"
-    token = issue_jwt(user["id"], user["email"], role)
-    is_paid = bool(user.get("subscription_active")) or role == "admin" or DEMO_MODE
+    token = issue_jwt(user["id"], user["email"], user["role"])
+    is_paid = bool(user.get("subscription_active")) or user.get("role") == "admin" or DEMO_MODE
     dest = "/dashboard" if is_paid else "/paywall"
     resp = RedirectResponse(url=dest, status_code=303)
+    # ADAPTIVE COOKIE (fixes localhost redirect loop)
     resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
@@ -343,13 +321,15 @@ def signup_submit(request: Request, email: str = Form(...), password: str = Form
     e = (email or "").lower().strip()
     if store.get_user_by_email(e):
         return templates.TemplateResponse("signup.html", {"request": request, "error": "User already exists"}, status_code=400)
-    # EDIT: Only the configured admin email can be admin; no "first user" auto-admin
-    role = "admin" if e == ADMIN_EMAIL else "viewer"
-    sub_active = True if role == "admin" else False
+    role = "viewer"
+    sub_active = False
+    if e == ADMIN_EMAIL or store.users_count() == 0:
+        role, sub_active = "admin", True
     user = store.create_user(e, hash_pw(password), role=role, subscription_active=sub_active)
-    token = issue_jwt(user["id"], user["email"], role)
+    token = issue_jwt(user["id"], user["email"], user["role"])
     dest = "/dashboard" if (sub_active or role == "admin" or DEMO_MODE) else "/paywall"
     resp = RedirectResponse(url=dest, status_code=303)
+    # ADAPTIVE COOKIE
     resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
@@ -369,12 +349,10 @@ class SettingsPayload(BaseModel):
 
 @app.get("/me", include_in_schema=False)
 def me(user=Depends(require_user)):
-    # EDIT: shadow server-side role so only ADMIN_EMAIL appears/admins in UI
-    role = "admin" if (user["email"] or "").strip().lower() == ADMIN_EMAIL else "viewer"
     return {
         "id": user["id"],
         "email": user["email"],
-        "role": role,
+        "role": user["role"],
         "subscription_active": bool(user.get("subscription_active")),
     }
 
@@ -556,6 +534,7 @@ def export_csv_from_db(wallet: str | None = None, limit: int = 1000, auth: bool 
     return {"rows": len(rows), "csv": df.to_csv(index=False)}
 
 
+# ---- helper: allow ?key=... or x-api-key header for download ----
 def _check_key_param_or_header(key: Optional[str] = None, x_api_key: Optional[str] = Header(default=None)):
     exp = expected_api_key() or ""
     incoming = (key or "").strip() or (x_api_key or "").strip()
@@ -610,6 +589,8 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
 
 
 # ---------------- UI API (session-protected; no x-api-key) ----------------
+# These mirror the API-key endpoints so the web UI works after login.
+
 @app.get("/metrics-ui", include_in_schema=False)
 def metrics_ui(
     threshold: float | None = None,
@@ -762,17 +743,7 @@ def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
         c = r.get("category") or "unknown"
         cats[c] = cats.get(c, 0) + 1
     metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "title": "Dashboard",
-            "key": None,
-            "metrics": metrics_data,
-            "rows": rows,
-            "threshold": threshold,
-        },
-    )
+    return templates.TemplateResponse("dashboard.html", {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold})
 
 @app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
 def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
