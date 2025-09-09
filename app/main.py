@@ -240,6 +240,10 @@ async def ws_alerts(ws: WebSocket):
     finally:
         await live.remove(ws)
 
+# Tiny HTTP probe so hitting /ws/alerts with GET doesn't 404
+@app.get("/ws/alerts", include_in_schema=False)
+def ws_alerts_probe():
+    return {"ok": True, "hint": "connect with WebSocket at ws(s)://<host>/ws/alerts"}
 
 # =========================
 # Email (SendGrid)
@@ -593,7 +597,7 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
     alerts = int((df["risk_score"] >= thr).sum())
     avg_risk = float(df["risk_score"].mean())
 
-    # >>> CHANGE 1 of 2: remove ambiguous Series truthiness
+    # Series truthiness fix
     categories: Dict[str, int] = {}
     if "category" in df.columns:
         cats_series = df["category"].fillna("unknown")
@@ -601,7 +605,6 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
         cats_series = pd.Series(["unknown"] * total)
     for cat, cnt in cats_series.value_counts().items():
         categories[str(cat)] = int(cnt)
-    # <<<
 
     df["day"] = df["timestamp"].dt.date
     grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
@@ -609,7 +612,75 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
     return {"total": total, "alerts": alerts, "avg_risk": round(avg_risk, 3), "categories": categories, "series_by_day": series}
 
 
-# REPLACE your current /uiapi/analyze/sample with this async version
+# ---------------- UI API (session-protected; no x-api-key) ----------------
+# These mirror the API-key endpoints so the web UI works after login.
+
+@app.get("/metrics-ui", include_in_schema=False)
+def metrics_ui(
+    threshold: float | None = None,
+    days: int | None = None,
+    user=Depends(require_paid_or_admin),
+):
+    rows = store.list_all(limit=10000)
+    if not rows:
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
+
+    env_threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    thr = env_threshold if threshold is None else float(threshold)
+    thr = max(0.0, min(1.0, thr))
+
+    cutoff = None
+    if days is not None:
+        try:
+            d = max(1, min(int(days), 365))
+            cutoff = datetime.utcnow() - timedelta(days=d)
+        except Exception:
+            cutoff = None
+
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
+
+    if cutoff is not None:
+        df = df[df["timestamp"] >= cutoff]
+
+    if df.empty:
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": []}
+
+    total = int(len(df))
+    alerts = int((df["risk_score"] >= thr).sum())
+    avg_risk = float(df["risk_score"].mean())
+
+    # Series truthiness fix (duplicate here)
+    categories: Dict[str, int] = {}
+    if "category" in df.columns:
+        cats_series = df["category"].fillna("unknown")
+    else:
+        cats_series = pd.Series(["unknown"] * total)
+    for cat, cnt in cats_series.value_counts().items():
+        categories[str(cat)] = int(cnt)
+
+    df["day"] = df["timestamp"].dt.date
+    grp = df.groupby("day").agg(avg_risk=("risk_score", "mean")).reset_index()
+    series = [{"date": str(d), "avg_risk": round(float(v), 3)} for d, v in zip(grp["day"], grp["avg_risk"])]
+
+    return {
+        "total": total,
+        "alerts": alerts,
+        "avg_risk": round(avg_risk, 3),
+        "categories": categories,
+        "series_by_day": series,
+    }
+
+
+@app.get("/alerts-ui/data", include_in_schema=False)
+def alerts_ui_data(limit: int = 100, user=Depends(require_paid_or_admin)):
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    rows = store.list_alerts(threshold, limit=limit)
+    return {"threshold": threshold, "count": len(rows), "items": rows}
+
+
+# Save demo/sample data to DB so dashboard shows data, and live-push
 @app.post("/uiapi/analyze/sample", include_in_schema=False)
 async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
     data_path = os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv")
@@ -655,3 +726,152 @@ async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
         await live.publish(d)
 
     return {"summary": summary(tagged).model_dump(), "saved": saved, "items": [t.model_dump() for t in tagged]}
+
+# Session-protected XRPL fetch used by the dashboard button
+@app.post("/uiapi/integrations/xrpl/fetch_and_save", include_in_schema=False)
+async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(require_paid_or_admin)):
+    raw = fetch_account_tx(account, limit=limit)
+    txs = xrpl_json_to_transactions(account, raw)
+    saved = 0
+    tagged_items: List[Dict[str, Any]] = []
+    emails: List[Dict[str, Any]] = []
+    for tx in txs:
+        risk, flags = score_risk(tx)
+        category = tag_category(tx)
+        tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
+        d = tagged.model_dump()
+        d["risk_score"] = d.get("score")
+        d["risk_flags"] = d.get("flags")
+        store.save_tagged(d)
+        saved += 1
+        tagged_items.append(d)
+        emails.append(notify_if_alert(tagged))
+        # live push for instant UI updates
+        await live.publish(d)
+    return {
+        "account": account,
+        "requested": limit,
+        "fetched": len(txs),
+        "saved": saved,
+        "threshold": float(os.getenv("RISK_THRESHOLD", "0.75")),
+        "items": tagged_items,
+        "emails": emails,
+    }
+
+
+# ---------------- UI: Dashboard & Alerts ----------------
+@app.get("/dashboard", name="ui_dashboard", include_in_schema=False)
+def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
+    rows = store.list_all(limit=200)
+    total = len(rows)
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    alerts = [r for r in rows if _row_score(r) >= threshold]
+    avg_risk = round(sum(_row_score(r) for r in rows) / total, 3) if total else 0.0
+    cats: Dict[str, int] = {}
+    for r in rows:
+        c = r.get("category") or "unknown"
+        cats[c] = cats.get(c, 0) + 1
+    metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
+    return templates.TemplateResponse("dashboard.html", {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold})
+
+@app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
+def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
+    threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
+    rows = store.list_alerts(threshold=threshold, limit=500)
+    return templates.TemplateResponse("alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows})
+
+
+# ---------------- Admin / Email tests ----------------
+@app.get("/admin/test-email", include_in_schema=False)
+def admin_test_email(request: Request):
+    key = request.query_params.get("key") or ""
+    expected = expected_api_key() or ""
+    if key != expected:
+        return HTMLResponse(content="Unauthorized. Append ?key=YOUR_API_KEY", status_code=401)
+    tx = Transaction(
+        tx_id="TEST-ALERT-123",
+        timestamp=datetime.utcnow().isoformat(),
+        chain="XRPL",
+        from_addr="rTEST_FROM",
+        to_addr="rTEST_TO",
+        amount=123.45,
+        symbol="XRP",
+        direction="out",
+        memo="Test email",
+        fee=0.0001,
+    )
+    tagged = TaggedTransaction(**_dump(tx), score=0.99, flags=["test_high_risk"], category="test-alert")
+    return {"ok": True, "email": notify_if_alert(tagged)}
+
+class NotifyRequest(BaseModel):
+    email: EmailStr
+
+@app.post("/notify/test")
+def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
+    return _send_email("Klerno Labs Test", "✅ Your Klerno Labs email system is working!", payload.email)
+
+
+# ---------------- Debug ----------------
+@app.get("/_debug/api_key")
+def debug_api_key(x_api_key: str | None = Header(default=None)):
+    exp = expected_api_key()
+    preview = (exp[:4] + "..." + exp[-4:]) if exp else ""
+    return {"received_header": x_api_key, "expected_loaded_from_env": bool(exp), "expected_length": len(exp or ""), "expected_preview": preview}
+
+@app.get("/_debug/routes", include_in_schema=False)
+def list_routes():
+    return {"routes": [r.path for r in app.router.routes]}
+
+
+# ---------------- LLM Explain & AI Endpoints ----------------
+class AskRequest(BaseModel):
+    question: str
+
+class BatchTx(BaseModel):
+    items: List[Transaction]
+
+@app.post("/explain/tx")
+def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key)):
+    try:
+        text = explain_tx(_dump(tx))
+        return {"explanation": text}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/explain/batch")
+def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_key)):
+    try:
+        txs = [_dump(t) for t in payload.items]
+        result = explain_batch(txs)
+        return result
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/ask")
+def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
+    try:
+        rows = store.list_all(limit=10000)
+        spec = ask_to_filters(req.question)
+        filtered = _apply_filters_safe(rows, spec)
+        answer = explain_selection(req.question, filtered)
+        preview = filtered[:50]
+        return {"filters": spec, "count": len(filtered), "preview": preview, "answer": answer}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/explain/summary")
+def explain_summary(days: int = 7, wallet: str | None = None, auth: bool = Security(enforce_api_key)):
+    try:
+        rows = store.list_by_wallet(wallet, limit=5000) if wallet else store.list_all(limit=5000)
+        cutoff = datetime.utcnow() - timedelta(days=max(1, min(days, 90)))
+        recent = []
+        for r in rows:
+            try:
+                t = datetime.fromisoformat(str(r.get("timestamp")))
+                if t >= cutoff:
+                    recent.append(r)
+            except Exception:
+                continue
+        return summarize_rows(recent, title=f"Last {days} days summary")
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
