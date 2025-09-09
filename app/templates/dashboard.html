@@ -455,9 +455,7 @@
     // boot
     (async function boot(){
       await loadSettings();
-      // Logged-in session is enough to be "connected"
-      setPill(true, (state.settings.time_range_days||7)+'d');
-      await loadMetricsOnce();
+      await loadMetricsOnce();   // (Number 1) removed the early setPill here
       startAutoRefresh();
     })();
   })();
