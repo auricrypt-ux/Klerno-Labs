@@ -127,7 +127,7 @@
       <div class="card">
         <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
         <canvas id="chartRisk"></canvas>
-        <div class="note">Simple canvas chart from <code>/metrics.series_by_day</code>.</div>
+        <div class="note">Simple canvas chart from <code>/metrics-ui.series_by_day</code>.</div>
       </div>
 
       <!-- categories -->
@@ -149,7 +149,7 @@
         <button class="btn primary" id="btnLoadDemo" type="button">✨ Load demo data</button>
       </div>
       <div class="note" style="margin-top:8px">
-        These call your API with <code>x-api-key</code>. Save the key once in <strong>Connect</strong>.
+        These run using your signed-in session (no API key needed).
       </div>
     </div>
 
@@ -183,7 +183,7 @@
       <div class="modal__body">
         <label class="frow">
           <span>x-api-key</span>
-          <input id="inpKey" type="password" placeholder="Paste your API key" autocomplete="off" />
+          <input id="inpKey" type="password" placeholder="Paste your API key (optional)" autocomplete="off" />
         </label>
 
         <div class="grid2small">
@@ -201,12 +201,12 @@
           </label>
         </div>
 
-        <p class="hint">We’ll save these to your account so they persist across sessions.</p>
+        <p class="hint">Saved to your account so they persist across sessions.</p>
       </div>
 
       <footer class="modal__ftr">
         <button class="btn" data-close>Cancel</button>
-        <button id="btnConnect" class="btn primary">Connect</button>
+        <button id="btnConnect" class="btn primary">Save</button>
       </footer>
     </div>
   </div>
@@ -277,23 +277,12 @@
         method:'POST',
         headers:{'Content-Type':'application/json'},
         credentials:'include',
-        body: JSON.stringify(patch) // merge happens server-side
+        body: JSON.stringify(patch)
       });
       const j = await r.json().catch(()=> ({}));
       if(!r.ok || j.ok === false) throw new Error(j.error || 'save failed');
       state.settings = j.settings || merged;
       return state.settings;
-    }
-
-    // local helpers (fallback / convenience)
-    const LOCAL_KEY = 'cw_api_key';
-    function readKeyFromLocalOrQS(){
-      const qs = new URLSearchParams(location.search).get('key') || '';
-      const ls = localStorage.getItem(LOCAL_KEY) || '';
-      return (qs || ls).trim();
-    }
-    function persistLocalKey(k){
-      if (k) localStorage.setItem(LOCAL_KEY, k);
     }
 
     // header helpers
@@ -302,12 +291,6 @@
       pill.classList.toggle('pill--connected', connected);
       pill.classList.toggle('pill--disconnected', !connected);
       pill.innerHTML = `<span class="dot" aria-hidden="true"></span> ${connected ? 'Connected' : 'Not connected'}${subtitle? ' • '+subtitle:''}`;
-    }
-    function apiHeaders(){
-      const k = state.settings.x_api_key || '';
-      const h = {};
-      if (k) h['x-api-key'] = k;
-      return h;
     }
 
     // painters
@@ -374,7 +357,7 @@
     }
 
     async function loadRecentHighRisk(){
-      const r = await fetch('/alerts?limit=50', { headers: apiHeaders() });
+      const r = await fetch('/alerts-ui/data?limit=50', { credentials:'include' });
       const tbody = document.getElementById('tblRecent'); if(!tbody) return;
       if(!r.ok){
         tbody.innerHTML = `<tr><td colspan="5" class="muted">Unauthorized for alerts preview</td></tr>`;
@@ -404,11 +387,11 @@
       }).join('');
     }
 
-    // metrics + connectivity
+    // metrics + connectivity (session-based)
     async function loadMetricsOnce(){
       try{
         const days = state.settings.time_range_days || 7;
-        const r = await fetch(`/metrics?days=${encodeURIComponent(days)}`, { headers: apiHeaders() });
+        const r = await fetch(`/metrics-ui?days=${encodeURIComponent(days)}`, { credentials:'include' });
         if(!r.ok) throw 0;
         const data = await r.json();
         state.metrics = data;
@@ -427,7 +410,7 @@
       document.addEventListener('visibilitychange', () => { if (!document.hidden) loadMetricsOnce(); });
     }
 
-    // connect handler
+    // connect/save handler (API key optional)
     btnConnect.addEventListener('click', async ()=>{
       const patch = {
         ...(inpKey.value.trim() ? { x_api_key: inpKey.value.trim() } : {}),
@@ -436,38 +419,33 @@
       };
       try{
         const saved = await saveSettings(patch);
-        if (patch.x_api_key) persistLocalKey(patch.x_api_key); // convenience
         closeModal();
         toast('Saved ✓');
-        setPill(!!saved.x_api_key, (saved.time_range_days||7)+'d');
+        setPill(true, (saved.time_range_days||7)+'d');
         await loadMetricsOnce();
       }catch{ toast('Save failed', false); }
     });
 
-    // quick actions
+    // quick actions (session-protected UI API)
     $('#fetchXRPL')?.addEventListener('click', async ()=>{
-      const k = state.settings.x_api_key || '';
-      if (!k) { toast('Save your x-api-key first', false); return; }
       const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
       if (!acct) return;
-      const url = `/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
-      const r = await fetch(url, { method:'POST', headers: apiHeaders() });
+      const url = `/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
+      const r = await fetch(url, { method:'POST', credentials:'include' });
       toast(r.ok ? 'Fetched & saved ✓' : 'Fetch failed', r.ok);
       await loadMetricsOnce();
     });
     $('#analyzeSample')?.addEventListener('click', async ()=>{
-      const r = await fetch('/analyze/sample', { method:'POST', headers: apiHeaders() });
+      const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
       toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok);
       await loadMetricsOnce();
     });
     $('#exportCsv')?.addEventListener('click', ()=>{
-      const k = state.settings.x_api_key || '';
-      const url = k ? `/export/csv/download?key=${encodeURIComponent(k)}` : '/export/csv/download';
-      window.open(url, '_blank');
+      window.open('/uiapi/export/csv/download', '_blank');
     });
     $('#btnLoadDemo')?.addEventListener('click', async ()=>{
       try{
-        const r = await fetch('/analyze/sample', { method:'POST', headers: apiHeaders() });
+        const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
         if(!r.ok) throw 0;
         toast('Demo data loaded ✓');
         await loadMetricsOnce();
@@ -477,28 +455,9 @@
     // boot
     (async function boot(){
       await loadSettings();
-
-      // If no server key, fall back to ?key= or localStorage and persist
-      if (!state.settings.x_api_key) {
-        const candidate = readKeyFromLocalOrQS();
-        if (candidate) {
-          try {
-            await saveSettings({ x_api_key: candidate });
-            persistLocalKey(candidate);
-          } catch {}
-        }
-      }
-
-      // Auto-open Connect modal if still no key after fallback
-      if (!state.settings.x_api_key) {
-        setPill(false);
-        openModal();
-        toast('Add your API key to connect');
-      } else {
-        setPill(true, (state.settings.time_range_days||7)+'d');
-        await loadMetricsOnce();
-      }
-
+      // Logged-in session is enough to be "connected"
+      setPill(true, (state.settings.time_range_days||7)+'d');
+      await loadMetricsOnce();
       startAutoRefresh();
     })();
   })();
@@ -538,7 +497,7 @@
         for(const p of P){
           p.x+=p.vx; p.y+=p.vy;
           if(p.x<0||p.x>W) p.vx*=-1;
-          if(p.y<0||p>H) p.vy*=-1;
+          if(p.y<0||p.y>H) p.vy*=-1;
           ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill();
         }
 
