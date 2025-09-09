@@ -248,3 +248,35 @@ def admin_xrpl_ping(payload: XRPLPingPayload, user=Depends(require_admin)):
         return {"ok": True, "fetched": n}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+# app/admin.py (append these)
+from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from .deps import require_user
+from .security import rotate_api_key, preview_api_key
+
+router = APIRouter(prefix="/admin", tags=["admin"])
+
+class ApiKeyRotateResponse(BaseModel):
+    api_key: str  # returned ONCE so the admin can copy it
+
+def _ensure_admin(user=Depends(require_user)):
+    if (user or {}).get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
+    return user
+
+@router.post("/api-key/rotate", response_model=ApiKeyRotateResponse)
+def admin_rotate_api_key(user=Depends(_ensure_admin)):
+    """
+    Generates a fresh API key and persists it to data/api_key.secret.
+    NOTE: If you set X_API_KEY in ENV, that still takes precedence.
+    """
+    new_key = rotate_api_key()
+    return {"api_key": new_key}
+
+@router.get("/api-key/preview")
+def admin_preview_api_key(user=Depends(_ensure_admin)):
+    """
+    Returns masked preview & metadata, never the full key.
+    """
+    return preview_api_key()
