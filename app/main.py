@@ -108,6 +108,27 @@ def _row_score(r: Dict[str, Any]) -> float:
         return 0.0
 
 
+# --- helpers for year views / exports ---
+def _parse_ts(v) -> Optional[datetime]:
+    try:
+        s = str(v).replace("Z", "")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+def _signed_amount(row: Dict[str, Any]) -> float:
+    """Positive for inflow, negative for outflow."""
+    try:
+        amt = float(row.get("amount") or 0)
+    except Exception:
+        amt = 0.0
+    direction = (row.get("direction") or "").lower().strip()
+    if direction in ("out", "debit", "sent"):
+        return -abs(amt)
+    return abs(amt)
+
+
 # =========================
 # FastAPI app + templates
 # =========================
@@ -129,11 +150,13 @@ SESSION_COOKIE = os.getenv("SESSION_COOKIE_NAME", "session")
 COOKIE_SECURE_MODE = os.getenv("COOKIE_SECURE", "auto").lower()  # "auto" | "true" | "false"
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()   # "lax" | "strict" | "none"
 
+
 def _is_secure_request(request: Request) -> bool:
     xf = (request.headers.get("x-forwarded-proto") or "").lower()
     if xf:
         return "https" in xf
     return request.url.scheme == "https"
+
 
 def _cookie_kwargs(request: Request) -> Dict[str, Any]:
     if COOKIE_SECURE_MODE in ("true", "1", "yes"):
@@ -156,8 +179,10 @@ def _cookie_kwargs(request: Request) -> Dict[str, Any]:
         "path": "/",
     }
 
+
 # Include routers
 from . import paywall  # noqa: E402
+
 app.include_router(paywall.router)
 app.include_router(auth_router.router)
 app.include_router(paywall_hooks.router)
@@ -219,7 +244,9 @@ class LiveHub:
         for ws in dead:
             await self.remove(ws)
 
+
 live = LiveHub()
+
 
 @app.websocket("/ws/alerts")
 async def ws_alerts(ws: WebSocket):
@@ -240,10 +267,12 @@ async def ws_alerts(ws: WebSocket):
     finally:
         await live.remove(ws)
 
+
 # Tiny HTTP probe so hitting /ws/alerts with GET doesn't 404
 @app.get("/ws/alerts", include_in_schema=False)
 def ws_alerts_probe():
     return {"ok": True, "hint": "connect with WebSocket at ws(s)://<host>/ws/alerts"}
+
 
 # =========================
 # Email (SendGrid)
@@ -251,6 +280,7 @@ def ws_alerts_probe():
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
 ALERT_FROM = os.getenv("ALERT_EMAIL_FROM", "").strip()
 ALERT_TO = os.getenv("ALERT_EMAIL_TO", "").strip()
+
 
 def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict[str, Any]:
     recipient = (to_email or ALERT_TO).strip()
@@ -271,6 +301,7 @@ def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict
         return {"sent": ok, "status_code": resp.status_code, "to": recipient}
     except Exception as e:
         return {"sent": False, "error": str(e)}
+
 
 def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
@@ -298,13 +329,16 @@ def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
 def landing(request: Request):
     return templates.TemplateResponse("landing.html", {"request": request})
 
+
 @app.head("/", include_in_schema=False)
 def root_head():
     return HTMLResponse(status_code=200)
 
+
 @app.get("/health")
 def health(auth: bool = Security(enforce_api_key)):
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
 
 @app.get("/healthz", include_in_schema=False)
 def healthz():
@@ -316,12 +350,15 @@ def healthz():
 def login_page(request: Request, error: str | None = None):
     return templates.TemplateResponse("login.html", {"request": request, "error": error})
 
+
 @app.post("/login", include_in_schema=False)
 def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
     e = (email or "").lower().strip()
     user = store.get_user_by_email(e)
     if not user or not verify_pw(password, user["password_hash"]):
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"}, status_code=400)
+        return templates.TemplateResponse(
+            "login.html", {"request": request, "error": "Invalid credentials"}, status_code=400
+        )
     token = issue_jwt(user["id"], user["email"], user["role"])
     is_paid = bool(user.get("subscription_active")) or user.get("role") == "admin" or DEMO_MODE
     dest = "/dashboard" if is_paid else "/paywall"
@@ -330,15 +367,19 @@ def login_submit(request: Request, email: str = Form(...), password: str = Form(
     resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
+
 @app.get("/signup", include_in_schema=False)
 def signup_page(request: Request, error: str | None = None):
     return templates.TemplateResponse("signup.html", {"request": request, "error": error})
+
 
 @app.post("/signup", include_in_schema=False)
 def signup_submit(request: Request, email: str = Form(...), password: str = Form(...)):
     e = (email or "").lower().strip()
     if store.get_user_by_email(e):
-        return templates.TemplateResponse("signup.html", {"request": request, "error": "User already exists"}, status_code=400)
+        return templates.TemplateResponse(
+            "signup.html", {"request": request, "error": "User already exists"}, status_code=400
+        )
     role = "viewer"
     sub_active = False
     if e == ADMIN_EMAIL or store.users_count() == 0:
@@ -350,6 +391,7 @@ def signup_submit(request: Request, email: str = Form(...), password: str = Form
     # ADAPTIVE COOKIE
     resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
+
 
 @app.get("/logout", include_in_schema=False)
 def logout_ui():
@@ -365,6 +407,7 @@ class SettingsPayload(BaseModel):
     time_range_days: Optional[int] = None
     ui_prefs: Optional[Dict[str, Any]] = None
 
+
 @app.get("/me", include_in_schema=False)
 def me(user=Depends(require_user)):
     return {
@@ -374,9 +417,11 @@ def me(user=Depends(require_user)):
         "subscription_active": bool(user.get("subscription_active")),
     }
 
+
 @app.get("/me/settings")
 def me_settings_get(user=Depends(require_user)):
     return store.get_settings(user["id"])
+
 
 @app.post("/me/settings")
 def me_settings_post(payload: SettingsPayload, user=Depends(require_user)):
@@ -398,6 +443,7 @@ def analyze_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     category = tag_category(tx)
     return TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
 
+
 @app.post("/analyze/batch")
 def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)):
     tagged: List[TaggedTransaction] = []
@@ -407,6 +453,7 @@ def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)
         tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
+
 @app.post("/report/csv")
 def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
     df = pd.read_csv(os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv"))
@@ -414,7 +461,9 @@ def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
     for col in ("from_addr", "to_addr"):
         if col not in df.columns:
             df[col] = ""
-    wallets = set(getattr(req, "wallet_addresses", None) or ([] if not getattr(req, "address", None) else [req.address]))
+    wallets = set(
+        getattr(req, "wallet_addresses", None) or ([] if not getattr(req, "address", None) else [req.address])
+    )
     start = pd.to_datetime(req.start) if getattr(req, "start", None) else df["timestamp"].min()
     end = pd.to_datetime(req.end) if getattr(req, "end", None) else df["timestamp"].max()
     mask_wallet = True if not wallets else (df["to_addr"].isin(wallets) | df["from_addr"].isin(wallets))
@@ -444,6 +493,7 @@ def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Securit
         category = tag_category(tx)
         tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
+
 
 @app.post("/analyze/sample")
 def analyze_sample(auth: bool = Security(enforce_api_key)):
@@ -488,10 +538,12 @@ async def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api
     email_result = notify_if_alert(tagged)
     return {"saved": True, "item": d, "email": email_result}
 
+
 @app.get("/transactions/{wallet}")
 def get_transactions_for_wallet(wallet: str, limit: int = 100, auth: bool = Security(enforce_api_key)):
     rows = store.list_by_wallet(wallet, limit=limit)
     return {"wallet": wallet, "count": len(rows), "items": rows}
+
 
 @app.get("/alerts")
 def get_alerts(limit: int = 100, auth: bool = Security(enforce_api_key)):
@@ -511,6 +563,7 @@ def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_
         category = tag_category(tx)
         tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"count": len(tagged), "items": [t.model_dump() for t in tagged]}
+
 
 @app.post("/integrations/xrpl/fetch_and_save")
 async def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
@@ -559,15 +612,20 @@ def _check_key_param_or_header(key: Optional[str] = None, x_api_key: Optional[st
     if exp and incoming != exp:
         raise HTTPException(status_code=401, detail="unauthorized")
 
+
 @app.get("/export/csv/download")
-def export_csv_download(wallet: str | None = None, limit: int = 1000, key: Optional[str] = None, x_api_key: Optional[str] = Header(None)):
+def export_csv_download(
+    wallet: str | None = None, limit: int = 1000, key: Optional[str] = None, x_api_key: Optional[str] = Header(None)
+):
     _check_key_param_or_header(key=key, x_api_key=x_api_key)
     rows = store.list_by_wallet(wallet, limit=limit) if wallet else store.list_all(limit=limit)
     df = pd.DataFrame(rows)
     buf = StringIO()
     df.to_csv(buf, index=False)
     buf.seek(0)
-    return StreamingResponse(iter([buf.read()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=klerno-export.csv"})
+    return StreamingResponse(
+        iter([buf.read()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=klerno-export.csv"}
+    )
 
 
 # ---------------- Metrics (JSON) ----------------
@@ -614,7 +672,6 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
 
 # ---------------- UI API (session-protected; no x-api-key) ----------------
 # These mirror the API-key endpoints so the web UI works after login.
-
 @app.get("/metrics-ui", include_in_schema=False)
 def metrics_ui(
     threshold: float | None = None,
@@ -727,6 +784,7 @@ async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
 
     return {"summary": summary(tagged).model_dump(), "saved": saved, "items": [t.model_dump() for t in tagged]}
 
+
 # Session-protected XRPL fetch used by the dashboard button
 @app.post("/uiapi/integrations/xrpl/fetch_and_save", include_in_schema=False)
 async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(require_paid_or_admin)):
@@ -758,6 +816,7 @@ async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(req
         "emails": emails,
     }
 
+
 # Recent items for the dashboard (optionally only alerts)
 @app.get("/uiapi/recent", include_in_schema=False)
 def ui_recent(limit: int = 50, only_alerts: bool = False, user=Depends(require_paid_or_admin)):
@@ -767,6 +826,149 @@ def ui_recent(limit: int = 50, only_alerts: bool = False, user=Depends(require_p
     else:
         rows = store.list_all(limit=limit)
     return {"items": rows}
+
+
+# Transactions for a given year (+ monthly series + band counts)
+@app.get("/uiapi/transactions/year", include_in_schema=False)
+def ui_transactions_year(year: int, user=Depends(require_paid_or_admin)):
+    now = datetime.utcnow()
+    two_years_ago = now - timedelta(days=730)
+    start = datetime(year, 1, 1)
+    end = datetime(year + 1, 1, 1)
+
+    rows = store.list_all(limit=100000)
+    items: List[Dict[str, Any]] = []
+    for r in rows:
+        t = _parse_ts(r.get("timestamp"))
+        if not t:
+            continue
+        if t < two_years_ago:
+            continue
+        if start <= t < end:
+            items.append(r)
+
+    if not items:
+        return {
+            "year": year,
+            "count": 0,
+            "items": [],
+            "series_by_month": [],
+            "bands_by_month": [],
+            "export_urls": {
+                "raw": f"/uiapi/transactions/export?year={year}&format=raw",
+                "qb": f"/uiapi/transactions/export?year={year}&format=qb",
+            },
+        }
+
+    df = pd.DataFrame(items)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["risk"] = df.apply(lambda rr: _row_score(rr), axis=1)
+    df["month"] = df["timestamp"].dt.to_period("M").dt.to_timestamp()
+
+    grp = df.groupby("month").agg(avg_risk=("risk", "mean"), count=("risk", "size")).reset_index()
+    series_by_month = [
+        {"date": str(d.date()), "avg_risk": round(float(v), 3), "count": int(c)}
+        for d, v, c in zip(grp["month"], grp["avg_risk"], grp["count"])
+    ]
+
+    def _band(x: float) -> str:
+        if x < 0.33:
+            return "low"
+        elif x < 0.66:
+            return "medium"
+        return "high"
+
+    df["band"] = df["risk"].apply(_band)
+    band_counts = df.groupby(["month", "band"]).size().unstack(fill_value=0).reset_index()
+
+    bands_by_month: List[Dict[str, Any]] = []
+    for _, row in band_counts.iterrows():
+        bands_by_month.append(
+            {
+                "date": str(row["month"].date()),
+                "low": int(row.get("low", 0)),
+                "medium": int(row.get("medium", 0)),
+                "high": int(row.get("high", 0)),
+            }
+        )
+
+    items.sort(key=lambda r: _parse_ts(r.get("timestamp")) or datetime.min, reverse=True)
+
+    return {
+        "year": year,
+        "count": len(items),
+        "items": items,
+        "series_by_month": series_by_month,
+        "bands_by_month": bands_by_month,
+        "export_urls": {
+            "raw": f"/uiapi/transactions/export?year={year}&format=raw",
+            "qb": f"/uiapi/transactions/export?year={year}&format=qb",
+        },
+    }
+
+
+# CSV export for a given year; format=raw or qb (QuickBooks-friendly)
+@app.get("/uiapi/transactions/export", include_in_schema=False)
+def ui_transactions_export(year: int, format: str = "raw", user=Depends(require_paid_or_admin)):
+    start = datetime(year, 1, 1)
+    end = datetime(year + 1, 1, 1)
+
+    rows = store.list_all(limit=100000)
+    items: List[Dict[str, Any]] = []
+    for r in rows:
+        t = _parse_ts(r.get("timestamp"))
+        if not t:
+            continue
+        if start <= t < end:
+            items.append(r)
+
+    df = pd.DataFrame(items)
+
+    if format.lower() == "qb":
+        def _direction(r):
+            d = (str(r.get("direction") or "")).lower()
+            return "Outflow" if d in ("out", "debit", "sent") else "Inflow"
+
+        if df.empty:
+            csv_str = ""
+        else:
+            qb = pd.DataFrame(
+                {
+                    "Date": pd.to_datetime(df.get("timestamp"), errors="coerce").dt.strftime("%Y-%m-%d"),
+                    "Transaction Type": df.get("chain", "XRPL"),
+                    "Name": df.get("to_addr").fillna("") if "to_addr" in df.columns else "",
+                    "Memo/Description": df.get("memo").fillna("") if "memo" in df.columns else "",
+                    "Category": df.get("category").fillna("unknown") if "category" in df.columns else "unknown",
+                    "Amount": df.apply(_signed_amount, axis=1),
+                    "Debit": df.apply(
+                        lambda r: abs(_signed_amount(r)) if _direction(r) == "Outflow" else 0.0, axis=1
+                    ),
+                    "Credit": df.apply(
+                        lambda r: abs(_signed_amount(r)) if _direction(r) == "Inflow" else 0.0, axis=1
+                    ),
+                    "Currency": df.get("symbol").fillna("") if "symbol" in df.columns else "",
+                    "Risk Score": df.apply(lambda r: round(_row_score(r), 3), axis=1),
+                    "Fee": pd.to_numeric(df.get("fee"), errors="coerce") if "fee" in df.columns else 0.0,
+                    "TxID": df.get("tx_id").fillna("") if "tx_id" in df.columns else "",
+                    "From": df.get("from_addr").fillna("") if "from_addr" in df.columns else "",
+                    "To": df.get("to_addr").fillna("") if "to_addr" in df.columns else "",
+                    "Direction": df.get("direction").fillna("") if "direction" in df.columns else "",
+                }
+            )
+            qb = qb.sort_values(by="Date")
+            csv_str = qb.to_csv(index=False)
+        fname = f"Transactions-{year}-QuickBooks.csv"
+    else:
+        if not df.empty:
+            df["risk_score"] = df.apply(lambda r: _row_score(r), axis=1)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
+            df = df.sort_values(by="timestamp")
+        csv_str = df.to_csv(index=False)
+        fname = f"Transactions-{year}.csv"
+
+    return StreamingResponse(
+        iter([csv_str]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
 
 
 # ---------------- UI: Dashboard & Alerts ----------------
@@ -782,13 +984,19 @@ def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
         c = r.get("category") or "unknown"
         cats[c] = cats.get(c, 0) + 1
     metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
-    return templates.TemplateResponse("dashboard.html", {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold})
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold},
+    )
+
 
 @app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
 def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold=threshold, limit=500)
-    return templates.TemplateResponse("alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows})
+    return templates.TemplateResponse(
+        "alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows}
+    )
 
 
 # ---------------- Admin / Email tests ----------------
@@ -813,8 +1021,10 @@ def admin_test_email(request: Request):
     tagged = TaggedTransaction(**_dump(tx), score=0.99, flags=["test_high_risk"], category="test-alert")
     return {"ok": True, "email": notify_if_alert(tagged)}
 
+
 class NotifyRequest(BaseModel):
     email: EmailStr
+
 
 @app.post("/notify/test")
 def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
@@ -826,7 +1036,13 @@ def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforc
 def debug_api_key(x_api_key: str | None = Header(default=None)):
     exp = expected_api_key()
     preview = (exp[:4] + "..." + exp[-4:]) if exp else ""
-    return {"received_header": x_api_key, "expected_loaded_from_env": bool(exp), "expected_length": len(exp or ""), "expected_preview": preview}
+    return {
+        "received_header": x_api_key,
+        "expected_loaded_from_env": bool(exp),
+        "expected_length": len(exp or ""),
+        "expected_preview": preview,
+    }
+
 
 @app.get("/_debug/routes", include_in_schema=False)
 def list_routes():
@@ -837,8 +1053,10 @@ def list_routes():
 class AskRequest(BaseModel):
     question: str
 
+
 class BatchTx(BaseModel):
     items: List[Transaction]
+
 
 @app.post("/explain/tx")
 def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key)):
@@ -848,6 +1066,7 @@ def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key))
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
 @app.post("/explain/batch")
 def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_key)):
     try:
@@ -856,6 +1075,7 @@ def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_k
         return result
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.post("/ask")
 def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
@@ -868,6 +1088,7 @@ def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
         return {"filters": spec, "count": len(filtered), "preview": preview, "answer": answer}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.get("/explain/summary")
 def explain_summary(days: int = 7, wallet: str | None = None, auth: bool = Security(enforce_api_key)):

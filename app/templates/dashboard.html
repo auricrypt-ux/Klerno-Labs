@@ -38,7 +38,7 @@
     @media (min-width:900px){ .brand .wordmark{ height:32px } }
     .spacer{flex:1}
     .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px;
-      padding:10px 14px; min-height:44px; border-radius:10px; border:1px solid var(--line);
+      padding:10px 14px; min-height:40px; border-radius:10px; border:1px solid var(--line);
       background:#151e3c; color:var(--ink); text-decoration:none; cursor:pointer}
     .btn.ghost{background:transparent}
     .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
@@ -70,13 +70,12 @@
     .muted{color:var(--muted)}
     .actions{display:flex; gap:10px; flex-wrap:wrap}
 
-    /* FIX: keep the right card stable and prevent canvas from pushing it */
     .grid2{
       display:grid;
-      grid-template-columns:minmax(0,1fr) 280px; /* left grows, right fixed */
+      grid-template-columns:minmax(0,1fr) 280px;
       gap:14px; align-items:start;
     }
-    .grid2 > .card{ min-width:0; } /* allow canvas to shrink inside grid */
+    .grid2 > .card{ min-width:0; }
 
     @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
     canvas{width:100%; height:220px; display:block}
@@ -105,7 +104,6 @@
         <img class="wordmark" src="{{ url_path_for('static', path='klerno-wordmark.png') }}" alt="Klerno Labs">
       </a>
       <div class="spacer"></div>
-      <!-- header actions removed per request -->
     </div>
   </header>
 
@@ -133,7 +131,7 @@
         <div class="card">
           <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
           <canvas id="chartRisk"></canvas>
-          <div class="note">Simple canvas chart from <code>/metrics-ui.series_by_day</code>.</div>
+          <div class="note">Bands: Low &lt; 0.33 · Medium 0.33–0.66 · High ≥ 0.66</div>
         </div>
         <div class="card">
           <div class="muted" style="margin-bottom:8px;">Top categories</div>
@@ -144,23 +142,10 @@
       <div style="height:14px"></div>
 
       <div class="card">
-        <div class="muted" style="margin-bottom:8px;">Quick actions</div>
-        <div class="actions">
-          <a class="btn" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
-          <a class="btn" id="analyzeSample">🧪 Analyze sample</a>
-          <a class="btn" id="exportCsv">⬇️ Export CSV</a>
-          <button class="btn primary" id="btnLoadDemo" type="button">✨ Load demo data</button>
-        </div>
-        <div class="note" style="margin-top:8px">These run using your signed-in session (no API key needed).</div>
-      </div>
-
-      <div style="height:14px"></div>
-
-      <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <div class="muted">Recent high-risk (live)</div>
           <label class="muted" style="display:inline-flex;align-items:center;gap:6px">
-            <input id="onlyThresh" type="checkbox" checked> Only ≥ threshold
+            <input id="onlyThresh" type="checkbox"> Only ≥ threshold
           </label>
         </div>
         <table>
@@ -200,6 +185,28 @@
       <div class="card">
         <h2 style="margin-top:0">Profile</h2>
         <p class="muted">Signed in as <em id="meEmail">—</em>. Role: <code id="meRole">—</code>.</p>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 8px 0">Transactions</h3>
+        <div id="yearsList" class="actions"></div>
+      </div>
+
+      <div id="yearView" class="card" hidden>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <h3 id="yearTitle" style="margin:0">Transactions</h3>
+          <div class="actions">
+            <a id="btnExportRaw" class="btn" target="_blank" rel="noopener">⬇️ Export CSV</a>
+            <a id="btnExportQB"  class="btn primary" target="_blank" rel="noopener">⬇️ QuickBooks CSV</a>
+          </div>
+        </div>
+        <div style="margin:10px 0">
+          <canvas id="yearChart" style="height:260px"></canvas>
+        </div>
+        <table>
+          <thead><tr><th>Date/Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th></tr></thead>
+          <tbody id="tblYear"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+        </table>
       </div>
     </section>
 
@@ -268,6 +275,24 @@
       }
     }
 
+    function paintBands(ctx, w, h, top, bottom, minY, maxY){
+      const ih = h - top - bottom;
+      const pad = 16, iw = w - pad*2;
+      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+
+      ctx.save();
+      // Low (0–0.33)
+      ctx.fillStyle = 'rgba(46, 204, 113, .10)';
+      ctx.fillRect(pad, Y(0.33), iw, Math.max(0, top+ih - Y(0.33)));
+      // Medium (0.33–0.66)
+      ctx.fillStyle = 'rgba(255, 169, 64, .10)';
+      ctx.fillRect(pad, Y(0.66), iw, Math.max(0, Y(0.33) - Y(0.66)));
+      // High (0.66–1)
+      ctx.fillStyle = 'rgba(239, 68, 68, .10)';
+      ctx.fillRect(pad, top, iw, Math.max(0, Y(0.66) - top));
+      ctx.restore();
+    }
+
     function paintChart(series){
       const cv = $('#chartRisk'); if(!cv) return;
       const dpr = Math.min(window.devicePixelRatio||1,2);
@@ -278,14 +303,24 @@
       const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
       ctx.clearRect(0,0,w,h);
       if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
+
       const xs = series.map(d => new Date(d.date).getTime());
       const ys = series.map(d => +d.avg_risk || 0);
       const minX=Math.min(...xs), maxX=Math.max(...xs);
-      const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
-      const pad=16, top=10, bottom=28;
-      const iw = w - pad*2, ih = h - top - bottom;
+
+      // Dynamic Y
+      let minY = Math.min(...ys, 0), maxY = Math.max(...ys, 1);
+      let rng = maxY - minY;
+      if (rng < 0.05){ const mid=(minY+maxY)/2; minY=Math.max(0, mid-0.03); maxY=Math.min(1, mid+0.03); rng=maxY-minY; }
+
+      const pad=16, top=10, bottom=28, iw=w-pad*2, ih=h-top-bottom;
       const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
       const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+
+      // Bands
+      paintBands(ctx, w, h, top, bottom, minY, maxY);
+
+      // Area + line
       const grad = ctx.createLinearGradient(0, top, 0, top+ih);
       grad.addColorStop(0,'rgba(123,108,255,.45)'); grad.addColorStop(1,'rgba(123,108,255,0)');
       ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
@@ -297,8 +332,8 @@
       ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
     }
 
-    // --- Recent table (alerts OR all)
-    const dedupe = new Set(); // tx_id or composite key
+    // --- Recent table (ALL or only alerts)
+    const dedupe = new Set();
     function keyFor(it){ return it.tx_id || `${it.timestamp}|${it.from_addr}|${it.to_addr}|${it.amount}`; }
     function passesFilter(it){
       const thr = 0.75;
@@ -328,12 +363,11 @@
     }
     async function loadRecent(){
       const only = $('#onlyThresh').checked ? 'true' : 'false';
-      const url = $('#onlyThresh').checked ? `/alerts-ui/data?limit=50`
-                                           : `/uiapi/recent?limit=50&only_alerts=${only}`;
+      const url = `/uiapi/recent?limit=50&only_alerts=${only}`;
       const r = await fetch(url, {credentials:'include'});
       if(!r.ok) return;
       const data = await r.json();
-      const items = (data.items || data || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+      const items = (data.items || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
       renderRows(items);
     }
     $('#onlyThresh').addEventListener('change', loadRecent);
@@ -405,7 +439,7 @@
       }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
     });
 
-    // Saved wallets (Create tab) --------------------------------------------
+    // Saved wallets (Create tab) – unchanged from your version
     async function loadWalletPrefs(){
       try{
         const r = await fetch('/me/settings', {credentials:'include'});
@@ -460,11 +494,84 @@
         refreshWalletList();
       };
     }
+
+    // Profile → Transactions ---------------------------------------------------
+    function listYears(){
+      const y = new Date().getFullYear();
+      return [y, y-1]; // last 2 years
+    }
+    function paintYears(){
+      const years = listYears();
+      const el = $('#yearsList');
+      el.innerHTML = years.map(y=>{
+        return `<a href="#" class="btn" data-year="${y}">📁 Transactions ${y}</a>`;
+      }).join(' ');
+      el.querySelectorAll('a').forEach(a=>{
+        a.onclick = (e)=>{ e.preventDefault(); openYear(+a.dataset.year); };
+      });
+    }
+    function paintYearChart(series){
+      const cv = $('#yearChart'); if(!cv) return;
+      const dpr = Math.min(window.devicePixelRatio||1,2);
+      const parent = cv.parentElement;
+      const w = parent.clientWidth, h = 260;
+      cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
+      cv.style.width = w+'px'; cv.style.height = h+'px';
+      const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,w,h);
+      if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
+
+      const xs = series.map(d => new Date(d.date).getTime());
+      const ys = series.map(d => +d.avg_risk || 0);
+      const minX=Math.min(...xs), maxX=Math.max(...xs);
+      let minY = Math.min(...ys, 0), maxY = Math.max(...ys, 1);
+      if (maxY-minY < 0.05){ const mid=(minY+maxY)/2; minY=Math.max(0, mid-0.03); maxY=Math.min(1, mid+0.03); }
+      const pad=16, top=10, bottom=28, iw=w-pad*2, ih=h-top-bottom;
+      const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
+      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+
+      // Bands (same as main)
+      (function paintBands(){
+        const Yb = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+        ctx.fillStyle = 'rgba(46, 204, 113, .10)'; ctx.fillRect(pad, Yb(0.33), iw, Math.max(0, top+ih - Yb(0.33)));
+        ctx.fillStyle = 'rgba(255, 169, 64, .10)'; ctx.fillRect(pad, Yb(0.66), iw, Math.max(0, Yb(0.33) - Yb(0.66)));
+        ctx.fillStyle = 'rgba(239, 68, 68, .10)'; ctx.fillRect(pad, top, iw, Math.max(0, Yb(0.66) - top));
+      })();
+
+      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
+      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
+      ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
+    }
+    function paintYearTable(items){
+      const tbody = $('#tblYear');
+      if(!items.length){ tbody.innerHTML = `<tr><td colspan="5" class="muted">No transactions</td></tr>`; return; }
+      tbody.innerHTML = items.map(it=>{
+        const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+        const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+        const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+        const cat= it.category || 'unknown';
+        const r  = Number(it.risk_score ?? it.score ?? 0);
+        const cls= r >= 0.75 ? 'warn' : 'ok';
+        return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${r.toFixed(3)}</td></tr>`;
+      }).join('');
+    }
+    async function openYear(year){
+      $('#yearTitle').textContent = `Transactions ${year}`;
+      $('#yearView').hidden = false;
+      const r = await fetch(`/uiapi/transactions/year?year=${year}`, {credentials:'include'});
+      if(!r.ok){ toast('Could not load year', 'err'); return; }
+      const data = await r.json();
+      $('#btnExportRaw').href = data.export_urls.raw;
+      $('#btnExportQB').href  = data.export_urls.qb;
+      paintYearChart(data.series_by_month || []);
+      const items = (data.items||[]).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+      paintYearTable(items);
+    }
     // -----------------------------------------------------------------------
 
     async function loadMetricsOnce(){
       try{
-        const r = await fetch(`/metrics-ui?days=7`, { credentials:'include' });
+        const r = await fetch(`/metrics-ui?days=365`, { credentials:'include' });
         if(!r.ok) throw 0;
         const data = await r.json();
         paintKPIs(data);
@@ -500,11 +607,12 @@
 
     (async function boot(){
       await loadMe();
+      paintYears();
       await loadMetricsOnce();
       await loadRecent();
       await refreshWalletList();
-      connectWS();                                    // live updates
-      setInterval(()=>{ if(!document.hidden){ loadMetricsOnce(); loadRecent(); } }, 5000); // faster refresh
+      connectWS();
+      setInterval(()=>{ if(!document.hidden){ loadMetricsOnce(); loadRecent(); } }, 5000);
       routeFromHash();
     })();
 
