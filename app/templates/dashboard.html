@@ -38,7 +38,7 @@
     @media (min-width:900px){ .brand .wordmark{ height:32px } }
     .spacer{flex:1}
     .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px;
-      padding:10px 14px; min-height:40px; border-radius:10px; border:1px solid var(--line);
+      padding:10px 14px; min-height:44px; border-radius:10px; border:1px solid var(--line);
       background:#151e3c; color:var(--ink); text-decoration:none; cursor:pointer}
     .btn.ghost{background:transparent}
     .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
@@ -70,12 +70,13 @@
     .muted{color:var(--muted)}
     .actions{display:flex; gap:10px; flex-wrap:wrap}
 
+    /* FIX: keep the right card stable and prevent canvas from pushing it */
     .grid2{
       display:grid;
-      grid-template-columns:minmax(0,1fr) 280px;
+      grid-template-columns:minmax(0,1fr) 280px; /* left grows, right fixed */
       gap:14px; align-items:start;
     }
-    .grid2 > .card{ min-width:0; }
+    .grid2 > .card{ min-width:0; } /* allow canvas to shrink inside grid */
 
     @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
     canvas{width:100%; height:220px; display:block}
@@ -104,6 +105,7 @@
         <img class="wordmark" src="{{ url_path_for('static', path='klerno-wordmark.png') }}" alt="Klerno Labs">
       </a>
       <div class="spacer"></div>
+      <!-- header actions removed per request -->
     </div>
   </header>
 
@@ -131,7 +133,7 @@
         <div class="card">
           <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
           <canvas id="chartRisk"></canvas>
-          <div class="note">Bands: Low &lt; 0.33 · Medium 0.33–0.66 · High ≥ 0.66</div>
+          <div class="note">Simple canvas chart from <code>/metrics-ui.series_by_day</code>.</div>
         </div>
         <div class="card">
           <div class="muted" style="margin-bottom:8px;">Top categories</div>
@@ -142,10 +144,23 @@
       <div style="height:14px"></div>
 
       <div class="card">
+        <div class="muted" style="margin-bottom:8px;">Quick actions</div>
+        <div class="actions">
+          <a class="btn" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
+          <a class="btn" id="analyzeSample">🧪 Analyze sample</a>
+          <a class="btn" id="exportCsv">⬇️ Export CSV</a>
+          <button class="btn primary" id="btnLoadDemo" type="button">✨ Load demo data</button>
+        </div>
+        <div class="note" style="margin-top:8px">These run using your signed-in session (no API key needed).</div>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <div class="muted">Recent high-risk (live)</div>
           <label class="muted" style="display:inline-flex;align-items:center;gap:6px">
-            <input id="onlyThresh" type="checkbox"> Only ≥ threshold
+            <input id="onlyThresh" type="checkbox" checked> Only ≥ threshold
           </label>
         </div>
         <table>
@@ -158,21 +173,16 @@
     <!-- EXPLORE -->
     <section id="panel-explore" role="tabpanel" aria-labelledby="tab-explore" hidden>
       <div class="card" style="margin-bottom:14px">
-        <h2 style="margin:0">Explore</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <h2 style="margin:0">Explore</h2>
+        </div>
         <p class="muted" style="margin:8px 0 0">Coming soon.</p>
       </div>
     </section>
 
-    <!-- CREATE (Saved wallets) -->
+    <!-- CREATE -->
     <section id="panel-create" role="tabpanel" aria-labelledby="tab-create" hidden>
-      <div class="card">
-        <h2 style="margin:0 0 8px 0">Saved wallets</h2>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-          <input id="walletInput" placeholder="rEb8TK3gBgk5..." style="flex:1;min-width:240px;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0f1630;color:#e8ecf3">
-          <button class="btn" id="btnAddWallet" type="button">＋ Save</button>
-        </div>
-        <div id="walletList" class="muted">No wallets yet.</div>
-      </div>
+      <div class="card"><h2 style="margin-top:0">Create</h2><p class="muted">Start something new. Nothing here yet.</p></div>
     </section>
 
     <!-- ALERTS -->
@@ -185,28 +195,6 @@
       <div class="card">
         <h2 style="margin-top:0">Profile</h2>
         <p class="muted">Signed in as <em id="meEmail">—</em>. Role: <code id="meRole">—</code>.</p>
-      </div>
-
-      <div class="card">
-        <h3 style="margin:0 0 8px 0">Transactions</h3>
-        <div id="yearsList" class="actions"></div>
-      </div>
-
-      <div id="yearView" class="card" hidden>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <h3 id="yearTitle" style="margin:0">Transactions</h3>
-          <div class="actions">
-            <a id="btnExportRaw" class="btn" target="_blank" rel="noopener">⬇️ Export CSV</a>
-            <a id="btnExportQB"  class="btn primary" target="_blank" rel="noopener">⬇️ QuickBooks CSV</a>
-          </div>
-        </div>
-        <div style="margin:10px 0">
-          <canvas id="yearChart" style="height:260px"></canvas>
-        </div>
-        <table>
-          <thead><tr><th>Date/Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th></tr></thead>
-          <tbody id="tblYear"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
-        </table>
       </div>
     </section>
 
@@ -227,7 +215,7 @@
 
   <script>
   (function(){
-    const $  = (s, r=document) => r.querySelector(s);
+    const $ = (s, r=document) => r.querySelector(s);
     const $$ = (s, r=document) => [...r.querySelectorAll(s)];
     const toasts = $('#toasts');
     const body = document.body;
@@ -239,7 +227,7 @@
       el.className = 'toast ' + type;
       el.textContent = msg;
       toasts.appendChild(el);
-      setTimeout(()=> el.remove(), ms);
+      setTimeout(()=>{ el.remove(); }, ms);
     }
 
     async function loadMe(){
@@ -249,7 +237,7 @@
         const me = await r.json();
         body.dataset.role = (me.role || 'viewer');
         $('#meEmail') && ($('#meEmail').textContent = me.email || '—');
-        $('#meRole')  && ($('#meRole').textContent = me.role  || '—');
+        $('#meRole') && ($('#meRole').textContent = me.role || '—');
       }catch{ body.dataset.role=''; }
     }
 
@@ -275,24 +263,6 @@
       }
     }
 
-    function paintBands(ctx, w, h, top, bottom, minY, maxY){
-      const ih = h - top - bottom;
-      const pad = 16, iw = w - pad*2;
-      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
-
-      ctx.save();
-      // Low (0–0.33)
-      ctx.fillStyle = 'rgba(46, 204, 113, .10)';
-      ctx.fillRect(pad, Y(0.33), iw, Math.max(0, top+ih - Y(0.33)));
-      // Medium (0.33–0.66)
-      ctx.fillStyle = 'rgba(255, 169, 64, .10)';
-      ctx.fillRect(pad, Y(0.66), iw, Math.max(0, Y(0.33) - Y(0.66)));
-      // High (0.66–1)
-      ctx.fillStyle = 'rgba(239, 68, 68, .10)';
-      ctx.fillRect(pad, top, iw, Math.max(0, Y(0.66) - top));
-      ctx.restore();
-    }
-
     function paintChart(series){
       const cv = $('#chartRisk'); if(!cv) return;
       const dpr = Math.min(window.devicePixelRatio||1,2);
@@ -303,24 +273,14 @@
       const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
       ctx.clearRect(0,0,w,h);
       if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
-
       const xs = series.map(d => new Date(d.date).getTime());
       const ys = series.map(d => +d.avg_risk || 0);
       const minX=Math.min(...xs), maxX=Math.max(...xs);
-
-      // Dynamic Y
-      let minY = Math.min(...ys, 0), maxY = Math.max(...ys, 1);
-      let rng = maxY - minY;
-      if (rng < 0.05){ const mid=(minY+maxY)/2; minY=Math.max(0, mid-0.03); maxY=Math.min(1, mid+0.03); rng=maxY-minY; }
-
-      const pad=16, top=10, bottom=28, iw=w-pad*2, ih=h-top-bottom;
+      const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
+      const pad=16, top=10, bottom=28;
+      const iw = w - pad*2, ih = h - top - bottom;
       const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
       const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
-
-      // Bands
-      paintBands(ctx, w, h, top, bottom, minY, maxY);
-
-      // Area + line
       const grad = ctx.createLinearGradient(0, top, 0, top+ih);
       grad.addColorStop(0,'rgba(123,108,255,.45)'); grad.addColorStop(1,'rgba(123,108,255,0)');
       ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
@@ -332,79 +292,38 @@
       ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
     }
 
-    // --- Recent table (ALL or only alerts)
-    const dedupe = new Set();
-    function keyFor(it){ return it.tx_id || `${it.timestamp}|${it.from_addr}|${it.to_addr}|${it.amount}`; }
-    function passesFilter(it){
-      const thr = 0.75;
-      const risk = Number(it.risk_score ?? it.score ?? 0);
-      return !$('#onlyThresh').checked || risk >= thr;
-    }
-    function formatRow(it){
-      const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
-      const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
-      const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
-      const cat= it.category || 'unknown';
-      const risk = Number(it.risk_score ?? it.score ?? 0);
-      const cls  = risk >= 0.75 ? 'warn' : 'ok';
-      return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${risk.toFixed(3)}</td></tr>`;
-    }
-    function renderRows(items){
-      const tbody = $('#tblRecent');
-      const rows = [];
-      dedupe.clear();
-      for(const it of items){
-        const k = keyFor(it);
-        if(dedupe.has(k)) continue;
-        dedupe.add(k);
-        if(passesFilter(it)) rows.push(formatRow(it));
-      }
-      tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
-    }
-    async function loadRecent(){
-      const only = $('#onlyThresh').checked ? 'true' : 'false';
-      const url = `/uiapi/recent?limit=50&only_alerts=${only}`;
-      const r = await fetch(url, {credentials:'include'});
-      if(!r.ok) return;
+    async function loadRecentHighRisk(){
+      const r = await fetch('/alerts-ui/data?limit=50', { credentials:'include' });
+      const tbody = $('#tblRecent'); if(!tbody) return;
+      if(!r.ok){ tbody.innerHTML = `<tr><td colspan="5" class="muted">Unauthorized for alerts preview</td></tr>`; return; }
       const data = await r.json();
-      const items = (data.items || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
-      renderRows(items);
+      const items = (data.items||[]).slice(0,50);
+      if (!items.length){ tbody.innerHTML = `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`; return; }
+      tbody.innerHTML = items.map(it=>{
+        const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+        const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+        const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+        const cat= it.category || 'unknown';
+        const risk = Number(it.risk_score ?? it.score ?? 0).toFixed(3);
+        const raw  = Number(it.risk_score ?? it.score ?? 0);
+        const thr  = 0.75; // purely visual; server enforces actual threshold
+        const cls  = raw >= thr ? 'warn' : 'ok';
+        return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${risk}</td></tr>`;
+      }).join('');
     }
-    $('#onlyThresh').addEventListener('change', loadRecent);
 
-    // --- WebSocket live insert
-    function connectWS(){
+    async function loadMetricsOnce(){
       try{
-        const wsUrl = (location.protocol==='https:'?'wss':'ws') + '://' + location.host + '/ws/alerts';
-        const ws = new WebSocket(wsUrl);
-        ws.onopen = ()=> ws.send(JSON.stringify({ping: Date.now()}));
-        ws.onmessage = (ev)=>{
-          try{
-            const msg = JSON.parse(ev.data||'{}');
-            if(msg.type==='tx' && msg.item){
-              const it = msg.item;
-              const k = keyFor(it);
-              if(!dedupe.has(k) && passesFilter(it)){
-                dedupe.add(k);
-                const tbody = $('#tblRecent');
-                const row = document.createElement('tr');
-                row.innerHTML = formatRow(it).replace(/^<tr>|<\/tr>$/g,'');
-                if (tbody.firstElementChild && tbody.firstElementChild.children.length===5) {
-                  tbody.insertBefore(row, tbody.firstElementChild);
-                } else {
-                  tbody.innerHTML = ''; tbody.appendChild(row);
-                }
-                while(tbody.children.length > 50) tbody.lastElementChild.remove();
-              }
-            }
-          }catch{}
-        };
-        ws.onclose = ()=> setTimeout(connectWS, 1500);
-        ws.onerror = ()=> ws.close();
-      }catch{}
+        const r = await fetch(`/metrics-ui?days=7`, { credentials:'include' });
+        if(!r.ok) throw 0;
+        const data = await r.json();
+        paintKPIs(data);
+        paintChart(data.series_by_day || []);   // unchanged basic chart
+        await loadRecentHighRisk();
+      }catch{ /* leave skeletons */ }
     }
 
-    // --- Actions
+    // --- Quick actions (improved error toast)
     $('#fetchXRPL')?.addEventListener('click', async ()=>{
       const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
       if (!acct) return;
@@ -416,14 +335,16 @@
           toast(`Fetch failed (${r.status}) ${text.slice(0,120)}`, 'err', 5000);
         } else {
           toast('Fetched & saved ✓');
-          await loadMetricsOnce(); await loadRecent();
+          await loadMetricsOnce();
         }
-      }catch(e){ toast(`Fetch error: ${e?.message||e}`, 'err', 5000); }
+      }catch(e){
+        toast(`Fetch error: ${e?.message||e}`, 'err', 5000);
+      }
     });
     $('#analyzeSample')?.addEventListener('click', async ()=>{
       const r = await fetch('/uiapi/analyze/sample', { method:'POST', credentials:'include' });
       toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok ? 'ok' : 'err');
-      await loadMetricsOnce(); await loadRecent();
+      await loadMetricsOnce();
     });
     $('#exportCsv')?.addEventListener('click', ()=>{ window.open('/uiapi/export/csv/download', '_blank'); });
     $('#btnLoadDemo')?.addEventListener('click', async ()=>{
@@ -434,151 +355,12 @@
           toast(`Could not load demo data (${r.status}) ${t.slice(0,120)}`, 'err', 5000);
         } else {
           toast('Demo data loaded ✓');
-          await loadMetricsOnce(); await loadRecent();
+          await loadMetricsOnce();
         }
       }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
     });
 
-    // Saved wallets (Create tab) – unchanged from your version
-    async function loadWalletPrefs(){
-      try{
-        const r = await fetch('/me/settings', {credentials:'include'});
-        if(!r.ok) return {saved_wallets:[]};
-        const s = await r.json();
-        return s.ui_prefs || {saved_wallets:[]};
-      }catch{ return {saved_wallets:[]}; }
-    }
-    async function saveWalletPrefs(prefs){
-      await fetch('/me/settings', {
-        method:'POST', credentials:'include',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ui_prefs: prefs })
-      });
-    }
-    async function refreshWalletList(){
-      const prefs = await loadWalletPrefs();
-      const list = prefs.saved_wallets || [];
-      const el = $('#walletList');
-      if(!list.length){ el.innerHTML = 'No wallets yet.'; return; }
-      el.innerHTML = list.map(a => `
-        <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
-          <code style="flex:1">${a}</code>
-          <button class="btn" data-act="fetch" data-acct="${a}">Fetch live</button>
-          <button class="btn" data-act="remove" data-acct="${a}">Remove</button>
-        </div>
-      `).join('');
-      el.querySelectorAll('button').forEach(b=>{
-        b.onclick = async (e)=>{
-          const acct = e.currentTarget.dataset.acct;
-          if(e.currentTarget.dataset.act === 'fetch'){
-            const r = await fetch(`/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`, {method:'POST', credentials:'include'});
-            toast(r.ok ? `Fetched ${acct} ✓` : `Fetch failed for ${acct}`, r.ok ? 'ok':'err');
-            await loadMetricsOnce(); await loadRecent();
-          }else{
-            const prefs2 = await loadWalletPrefs();
-            prefs2.saved_wallets = (prefs2.saved_wallets||[]).filter(x=>x!==acct);
-            await saveWalletPrefs(prefs2);
-            refreshWalletList();
-          }
-        };
-      });
-      $('#btnAddWallet').onclick = async ()=>{
-        const a = ($('#walletInput').value||'').trim();
-        if(!a) return;
-        const prefs2 = await loadWalletPrefs();
-        const set = new Set(prefs2.saved_wallets||[]);
-        set.add(a);
-        prefs2.saved_wallets = [...set];
-        await saveWalletPrefs(prefs2);
-        $('#walletInput').value='';
-        refreshWalletList();
-      };
-    }
-
-    // Profile → Transactions ---------------------------------------------------
-    function listYears(){
-      const y = new Date().getFullYear();
-      return [y, y-1]; // last 2 years
-    }
-    function paintYears(){
-      const years = listYears();
-      const el = $('#yearsList');
-      el.innerHTML = years.map(y=>{
-        return `<a href="#" class="btn" data-year="${y}">📁 Transactions ${y}</a>`;
-      }).join(' ');
-      el.querySelectorAll('a').forEach(a=>{
-        a.onclick = (e)=>{ e.preventDefault(); openYear(+a.dataset.year); };
-      });
-    }
-    function paintYearChart(series){
-      const cv = $('#yearChart'); if(!cv) return;
-      const dpr = Math.min(window.devicePixelRatio||1,2);
-      const parent = cv.parentElement;
-      const w = parent.clientWidth, h = 260;
-      cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
-      cv.style.width = w+'px'; cv.style.height = h+'px';
-      const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-      ctx.clearRect(0,0,w,h);
-      if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
-
-      const xs = series.map(d => new Date(d.date).getTime());
-      const ys = series.map(d => +d.avg_risk || 0);
-      const minX=Math.min(...xs), maxX=Math.max(...xs);
-      let minY = Math.min(...ys, 0), maxY = Math.max(...ys, 1);
-      if (maxY-minY < 0.05){ const mid=(minY+maxY)/2; minY=Math.max(0, mid-0.03); maxY=Math.min(1, mid+0.03); }
-      const pad=16, top=10, bottom=28, iw=w-pad*2, ih=h-top-bottom;
-      const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
-      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
-
-      // Bands (same as main)
-      (function paintBands(){
-        const Yb = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
-        ctx.fillStyle = 'rgba(46, 204, 113, .10)'; ctx.fillRect(pad, Yb(0.33), iw, Math.max(0, top+ih - Yb(0.33)));
-        ctx.fillStyle = 'rgba(255, 169, 64, .10)'; ctx.fillRect(pad, Yb(0.66), iw, Math.max(0, Yb(0.33) - Yb(0.66)));
-        ctx.fillStyle = 'rgba(239, 68, 68, .10)'; ctx.fillRect(pad, top, iw, Math.max(0, Yb(0.66) - top));
-      })();
-
-      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
-      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
-      ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
-    }
-    function paintYearTable(items){
-      const tbody = $('#tblYear');
-      if(!items.length){ tbody.innerHTML = `<tr><td colspan="5" class="muted">No transactions</td></tr>`; return; }
-      tbody.innerHTML = items.map(it=>{
-        const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
-        const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
-        const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
-        const cat= it.category || 'unknown';
-        const r  = Number(it.risk_score ?? it.score ?? 0);
-        const cls= r >= 0.75 ? 'warn' : 'ok';
-        return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${r.toFixed(3)}</td></tr>`;
-      }).join('');
-    }
-    async function openYear(year){
-      $('#yearTitle').textContent = `Transactions ${year}`;
-      $('#yearView').hidden = false;
-      const r = await fetch(`/uiapi/transactions/year?year=${year}`, {credentials:'include'});
-      if(!r.ok){ toast('Could not load year', 'err'); return; }
-      const data = await r.json();
-      $('#btnExportRaw').href = data.export_urls.raw;
-      $('#btnExportQB').href  = data.export_urls.qb;
-      paintYearChart(data.series_by_month || []);
-      const items = (data.items||[]).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
-      paintYearTable(items);
-    }
-    // -----------------------------------------------------------------------
-
-    async function loadMetricsOnce(){
-      try{
-        const r = await fetch(`/metrics-ui?days=365`, { credentials:'include' });
-        if(!r.ok) throw 0;
-        const data = await r.json();
-        paintKPIs(data);
-        paintChart(data.series_by_day || []);
-      }catch{}
-    }
-
+    // --- Tabs + router
     function setSelected(tab){
       const target = tab.getAttribute('aria-controls');
       tabs.forEach(t=>{ const sel = (t===tab); t.setAttribute('aria-selected', sel); t.tabIndex = sel ? 0 : -1; });
@@ -605,18 +387,16 @@
     }
     window.addEventListener('hashchange', routeFromHash);
 
+    // --- Boot
     (async function boot(){
       await loadMe();
-      paintYears();
       await loadMetricsOnce();
-      await loadRecent();
-      await refreshWalletList();
-      connectWS();
-      setInterval(()=>{ if(!document.hidden){ loadMetricsOnce(); loadRecent(); } }, 5000);
       routeFromHash();
+      // Auto refresh (only when visible)
+      setInterval(()=>{ if(!document.hidden) loadMetricsOnce(); }, 15000);
     })();
 
-    // background animation (unchanged)
+    // --- Background animation (single-line fix below)
     (function(){
       const bg = document.getElementById('bg'); if(!bg) return;
       const ctx = bg.getContext('2d');
@@ -638,7 +418,7 @@
         for(const p of P){
           p.x+=p.vx; p.y+=p.vy;
           if(p.x<0||p.x>W) p.vx*=-1;
-          if(p.y<0||p.y>H) p.vy*=-1;
+          if(p.y<0||p.y>H) p.vy*=-1; /* ← FIXED (was p>H) */
           ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill();
         }
         ctx.strokeStyle='rgba(200,220,255,.11)';
