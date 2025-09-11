@@ -70,12 +70,7 @@
     .muted{color:var(--muted)}
     .actions{display:flex; gap:10px; flex-wrap:wrap}
 
-    /* keep right card stable and prevent canvas from pushing it */
-    .grid2{
-      display:grid;
-      grid-template-columns:minmax(0,1fr) 280px;
-      gap:14px; align-items:start;
-    }
+    .grid2{ display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:14px; align-items:start; }
     .grid2 > .card{ min-width:0; }
 
     @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
@@ -157,9 +152,9 @@
 
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;">
-          <div class="muted">Recent high-risk (live)</div>
+          <div class="muted">Recent (live)</div>
           <label class="muted" style="display:inline-flex;align-items:center;gap:6px">
-            <input id="onlyThresh" type="checkbox" checked> Only ≥ threshold
+            <input id="onlyThresh" type="checkbox"> Only ≥ threshold
           </label>
         </div>
         <table>
@@ -307,7 +302,7 @@
       ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
     }
 
-    // --- Recent table (alerts OR all)
+    // --- Recent table: always fetch all, then filter client-side
     const dedupe = new Set();
     function keyFor(it){ return it.tx_id || `${it.timestamp}|${it.from_addr}|${it.to_addr}|${it.amount}`; }
     function passesFilter(it){
@@ -334,16 +329,13 @@
         dedupe.add(k);
         if(passesFilter(it)) rows.push(formatRow(it));
       }
-      tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" class="muted">No alerts yet</td></tr>`;
+      tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" class="muted">No data yet. Try “Analyze sample”.</td></tr>`;
     }
     async function loadRecent(){
-      const only = $('#onlyThresh').checked ? 'true' : 'false';
-      const url = $('#onlyThresh').checked ? `/alerts-ui/data?limit=50`
-                                           : `/uiapi/recent?limit=50&only_alerts=${only}`;
-      const r = await fetch(url, {credentials:'include'});
+      const r = await fetch('/uiapi/recent?limit=50&only_alerts=false', {credentials:'include'});
       if(!r.ok) return;
       const data = await r.json();
-      const items = (data.items || data || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+      const items = (data.items || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
       renderRows(items);
     }
     $('#onlyThresh').addEventListener('change', loadRecent);
@@ -380,7 +372,7 @@
       }catch{}
     }
 
-    // --- Quick actions (POSTs now include CSRF)
+    // --- Quick actions
     $('#fetchXRPL')?.addEventListener('click', async ()=>{
       const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
       if (!acct) return;
@@ -401,6 +393,7 @@
       toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok ? 'ok' : 'err');
       await loadMetricsOnce(); await loadRecent();
     });
+    // FIX: point export to session route that exists
     $('#exportCsv')?.addEventListener('click', ()=>{ window.open('/uiapi/export/csv/download', '_blank'); });
     $('#btnLoadDemo')?.addEventListener('click', async ()=>{
       try{

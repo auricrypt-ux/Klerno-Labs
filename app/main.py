@@ -669,6 +669,25 @@ def export_csv_download(wallet: str | None = None, limit: int = 1000, key: Optio
     return StreamingResponse(iter([buf.read()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=klerno-export.csv"})
 
 
+# ---------------- CSV export (UI, session-protected) ----------------
+@app.get("/uiapi/export/csv/download", include_in_schema=False)
+def ui_export_csv_download(
+    wallet: str | None = None,
+    limit: int = 1000,
+    _user = Depends(require_paid_or_admin),
+):
+    rows = store.list_by_wallet(wallet, limit=limit) if wallet else store.list_all(limit=limit)
+    df = pd.DataFrame(rows)
+    buf = StringIO()
+    df.to_csv(buf, index=False)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=klerno-export.csv"},
+    )
+
+
 # ---------------- Metrics (JSON) ----------------
 @app.get("/metrics")
 def metrics(threshold: float | None = None, days: int | None = None, _auth: bool = Security(enforce_api_key)):
