@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from io import StringIO
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 import os
+import hmac
+import secrets
 import pandas as pd
 from dataclasses import asdict, is_dataclass, fields as dc_fields
 
@@ -29,8 +31,9 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
+from starlette.middleware.base import BaseHTTPMiddleware
 
-# live push hub
+# NEW: for live push hub
 import asyncio, json
 
 from . import store
@@ -70,15 +73,15 @@ except ImportError:
     _llm_apply_filters = None
 
 
-# ---------------- helpers ----------------
 def _apply_filters_safe(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Fallback if llm.apply_filters isn't available; supports a few numeric/date ops."""
+    """Fallback if llm.apply_filters isn't available."""
     if _llm_apply_filters:
         return _llm_apply_filters(rows, spec)
     if not spec:
         return rows
     out = rows
     for k, v in spec.items():
+        # simple numeric/date operators
         if k in ("min_amount", "max_amount"):
             key = "amount"
             if k == "min_amount":
@@ -111,13 +114,12 @@ def _dump(obj: Any) -> Dict[str, Any]:
     except Exception:
         return {"value": obj}
 
-
+# ---- helpers
 def _safe_dt(x) -> datetime:
     try:
         return datetime.fromisoformat(str(x).replace("Z", ""))
     except Exception:
         return datetime.min
-
 
 def _risk_bucket(score: float) -> str:
     s = float(score or 0)
@@ -125,9 +127,8 @@ def _risk_bucket(score: float) -> str:
     if s < 0.66: return "medium"
     return "high"
 
-
+# unified, NaN-safe reader for old/new score keys
 def _row_score(r: Dict[str, Any]) -> float:
-    """unified, NaN-safe reader for old/new score keys"""
     try:
         val = r.get("score", None)
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -140,9 +141,72 @@ def _row_score(r: Dict[str, Any]) -> float:
 
 
 # =========================
+# Security hardening
+# =========================
+REQ_ID_HEADER = "X-Request-ID"
+CSRF_COOKIE = "csrf_token"
+CSRF_HEADER = "X-CSRF-Token"
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self.enable_hsts = (os.getenv("ENABLE_HSTS", "true").lower() == "true")
+
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[HTMLResponse]]):
+        resp = await call_next(request)
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        )
+        resp.headers.setdefault("Content-Security-Policy", csp)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if self.enable_hsts and request.url.scheme == "https":
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+        return resp
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        rid = request.headers.get(REQ_ID_HEADER) or secrets.token_hex(8)
+        request.state.request_id = rid
+        resp = await call_next(request)
+        resp.headers.setdefault(REQ_ID_HEADER, rid)
+        return resp
+
+def issue_csrf_cookie(resp: HTMLResponse):
+    token = secrets.token_urlsafe(32)
+    resp.set_cookie(
+        CSRF_COOKIE, token,
+        secure=True, samesite="Strict", httponly=False, path="/", max_age=60*60*8
+    )
+    return token
+
+def verify_csrf(request: Request):
+    token_cookie = request.cookies.get(CSRF_COOKIE)
+    token_hdr = request.headers.get(CSRF_HEADER)
+    if not token_cookie or not token_hdr:
+        raise HTTPException(status_code=403, detail="CSRF token missing")
+    if not hmac.compare_digest(token_cookie, token_hdr):
+        raise HTTPException(status_code=403, detail="Bad CSRF token")
+
+async def csrf_protect_ui(request: Request):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        verify_csrf(request)
+    return True
+
+
+# =========================
 # FastAPI app + templates
 # =========================
 app = FastAPI(title="Klerno Labs API (MVP) — XRPL First")
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Static & templates
 BASE_DIR = os.path.dirname(__file__)
@@ -209,7 +273,6 @@ if not existing:
         role="admin",
         subscription_active=True,
     )
-
 
 # ---- Live push hub (WebSocket) ----------------------------------------------
 class LiveHub:
@@ -328,14 +391,16 @@ def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
 # ---------------- Landing & health ----------------
 @app.get("/", include_in_schema=False)
 def landing(request: Request):
-    return templates.TemplateResponse("landing.html", {"request": request})
+    resp = templates.TemplateResponse("landing.html", {"request": request})
+    issue_csrf_cookie(resp)
+    return resp
 
 @app.head("/", include_in_schema=False)
 def root_head():
     return HTMLResponse(status_code=200)
 
 @app.get("/health")
-def health(auth: bool = Security(enforce_api_key)):
+def health(_auth: bool = Security(enforce_api_key)):
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
 @app.get("/healthz", include_in_schema=False)
@@ -346,7 +411,9 @@ def healthz():
 # ---------------- UI Login / Signup / Logout ----------------
 @app.get("/login", include_in_schema=False)
 def login_page(request: Request, error: str | None = None):
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+    resp = templates.TemplateResponse("login.html", {"request": request, "error": error})
+    issue_csrf_cookie(resp)
+    return resp
 
 @app.post("/login", include_in_schema=False)
 def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
@@ -363,7 +430,9 @@ def login_submit(request: Request, email: str = Form(...), password: str = Form(
 
 @app.get("/signup", include_in_schema=False)
 def signup_page(request: Request, error: str | None = None):
-    return templates.TemplateResponse("signup.html", {"request": request, "error": error})
+    resp = templates.TemplateResponse("signup.html", {"request": request, "error": error})
+    issue_csrf_cookie(resp)
+    return resp
 
 @app.post("/signup", include_in_schema=False)
 def signup_submit(request: Request, email: str = Form(...), password: str = Form(...)):
@@ -423,13 +492,13 @@ def me_settings_post(payload: SettingsPayload, user=Depends(require_user)):
 
 # ---------------- Core API ----------------
 @app.post("/analyze/tx", response_model=TaggedTransaction)
-def analyze_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
+def analyze_tx(tx: Transaction, _auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
     return TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
 
 @app.post("/analyze/batch")
-def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)):
+def analyze_batch(txs: List[Transaction], _auth: bool = Security(enforce_api_key)):
     tagged: List[TaggedTransaction] = []
     for tx in txs:
         risk, flags = score_risk(tx)
@@ -438,7 +507,7 @@ def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
 @app.post("/report/csv")
-def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
+def report_csv(req: ReportRequest, _auth: bool = Security(enforce_api_key)):
     df = pd.read_csv(os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv"))
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     for col in ("from_addr", "to_addr"):
@@ -465,7 +534,7 @@ def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
 
 # ---------------- XRPL parse (posted JSON) ----------------
 @app.post("/integrations/xrpl/parse")
-def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Security(enforce_api_key)):
+def parse_xrpl(account: str, payload: List[Dict[str, Any]], _auth: bool = Security(enforce_api_key)):
     txs = xrpl_json_to_transactions(account, payload)
     tagged: List[TaggedTransaction] = []
     for tx in txs:
@@ -475,7 +544,7 @@ def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Securit
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
 @app.post("/analyze/sample")
-def analyze_sample(auth: bool = Security(enforce_api_key)):
+def analyze_sample(_auth: bool = Security(enforce_api_key)):
     data_path = os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv")
     df = pd.read_csv(data_path)
     text_cols = ("memo", "notes", "symbol", "direction", "chain", "tx_id", "from_addr", "to_addr")
@@ -504,7 +573,7 @@ def analyze_sample(auth: bool = Security(enforce_api_key)):
 
 # ---------------- “Memory” (DB) + email on save ----------------
 @app.post("/analyze_and_save/tx")
-async def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
+async def analyze_and_save_tx(tx: Transaction, _auth: bool = Security(enforce_api_key)):
     risk, flags = score_risk(tx)
     category = tag_category(tx)
     tagged = TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
@@ -518,12 +587,12 @@ async def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api
     return {"saved": True, "item": d, "email": email_result}
 
 @app.get("/transactions/{wallet}")
-def get_transactions_for_wallet(wallet: str, limit: int = 100, auth: bool = Security(enforce_api_key)):
+def get_transactions_for_wallet(wallet: str, limit: int = 100, _auth: bool = Security(enforce_api_key)):
     rows = store.list_by_wallet(wallet, limit=limit)
     return {"wallet": wallet, "count": len(rows), "items": rows}
 
 @app.get("/alerts")
-def get_alerts(limit: int = 100, auth: bool = Security(enforce_api_key)):
+def get_alerts(limit: int = 100, _auth: bool = Security(enforce_api_key)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold, limit=limit)
     return {"threshold": threshold, "count": len(rows), "items": rows}
@@ -531,7 +600,7 @@ def get_alerts(limit: int = 100, auth: bool = Security(enforce_api_key)):
 
 # ---------------- XRPL fetch (read-only) ----------------
 @app.get("/integrations/xrpl/fetch")
-def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
+def xrpl_fetch(account: str, limit: int = 10, _auth: bool = Security(enforce_api_key)):
     raw = fetch_account_tx(account, limit=limit)
     txs = xrpl_json_to_transactions(account, raw)
     tagged: List[TaggedTransaction] = []
@@ -542,7 +611,7 @@ def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_
     return {"count": len(tagged), "items": [t.model_dump() for t in tagged]}
 
 @app.post("/integrations/xrpl/fetch_and_save")
-async def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
+async def xrpl_fetch_and_save(account: str, limit: int = 10, _auth: bool = Security(enforce_api_key)):
     raw = fetch_account_tx(account, limit=limit)
     txs = xrpl_json_to_transactions(account, raw)
     saved = 0
@@ -574,26 +643,12 @@ async def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Securi
 
 # ---------------- CSV export (DB) ----------------
 @app.get("/export/csv")
-def export_csv_from_db(wallet: str | None = None, limit: int = 1000, auth: bool = Security(enforce_api_key)):
+def export_csv_from_db(wallet: str | None = None, limit: int = 1000, _auth: bool = Security(enforce_api_key)):
     rows = store.list_by_wallet(wallet, limit=limit) if wallet else store.list_all(limit=limit)
     if not rows:
         return {"rows": 0, "csv": ""}
     df = pd.DataFrame(rows)
     return {"rows": len(rows), "csv": df.to_csv(index=False)}
-
-# Session-protected CSV export for UI
-@app.get("/uiapi/export/csv/download", include_in_schema=False)
-def ui_export_csv_download(wallet: str | None = None, limit: int = 1000, user=Depends(require_paid_or_admin)):
-    rows = store.list_by_wallet(wallet, limit=limit) if wallet else store.list_all(limit=limit)
-    df = pd.DataFrame(rows)
-    buf = StringIO()
-    df.to_csv(buf, index=False)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.read()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=klerno-export.csv"},
-    )
 
 
 # ---- helper: allow ?key=... or x-api-key header for download ----
@@ -616,16 +671,13 @@ def export_csv_download(wallet: str | None = None, limit: int = 1000, key: Optio
 
 # ---------------- Metrics (JSON) ----------------
 @app.get("/metrics")
-def metrics(threshold: float | None = None, days: int | None = None, auth: bool = Security(enforce_api_key)):
+def metrics(threshold: float | None = None, days: int | None = None, _auth: bool = Security(enforce_api_key)):
     rows = store.list_all(limit=10000)
-    empty = {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
     if not rows:
-        return empty
-
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
     env_threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     thr = env_threshold if threshold is None else float(threshold)
     thr = max(0.0, min(1.0, thr))
-
     cutoff = None
     if days is not None:
         try:
@@ -633,16 +685,13 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
             cutoff = datetime.utcnow() - timedelta(days=d)
         except Exception:
             cutoff = None
-
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
-
     if cutoff is not None:
         df = df[df["timestamp"] >= cutoff]
     if df.empty:
-        return empty
-
+        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
     total = int(len(df))
     alerts = int((df["risk_score"] >= thr).sum())
     avg_risk = float(df["risk_score"].mean())
@@ -673,30 +722,27 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
             "high": int(row.get("high", 0)),
         })
 
-    return {
-        "total": total,
-        "alerts": alerts,
-        "avg_risk": round(avg_risk, 3),
-        "categories": categories,
-        "series_by_day": series,
-        "series_by_day_lmh": series_lmh,
-    }
+    return {"total": total, "alerts": alerts, "avg_risk": round(avg_risk, 3), "categories": categories, "series_by_day": series, "series_by_day_lmh": series_lmh}
 
 
 # ---------------- UI API (session-protected; no x-api-key) ----------------
 @app.get("/metrics-ui", include_in_schema=False)
-def metrics_ui(threshold: float | None = None, days: int | None = None, user=Depends(require_paid_or_admin)):
-    return metrics(threshold=threshold, days=days, auth=True)
+def metrics_ui(
+    threshold: float | None = None,
+    days: int | None = None,
+    _user=Depends(require_paid_or_admin),
+):
+    return metrics(threshold=threshold, days=days, _auth=True)
 
 @app.get("/alerts-ui/data", include_in_schema=False)
-def alerts_ui_data(limit: int = 100, user=Depends(require_paid_or_admin)):
+def alerts_ui_data(limit: int = 100, _user=Depends(require_paid_or_admin)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold, limit=limit)
     return {"threshold": threshold, "count": len(rows), "items": rows}
 
 # Save demo/sample data to DB so dashboard shows data, and live-push
 @app.post("/uiapi/analyze/sample", include_in_schema=False)
-async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
+async def ui_analyze_sample(_user=Depends(require_paid_or_admin), _=Depends(csrf_protect_ui)):
     data_path = os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv")
     df = pd.read_csv(data_path)
 
@@ -739,7 +785,7 @@ async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
 
 # Session-protected XRPL fetch used by the dashboard button
 @app.post("/uiapi/integrations/xrpl/fetch_and_save", include_in_schema=False)
-async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(require_paid_or_admin)):
+async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, _user=Depends(require_paid_or_admin), _=Depends(csrf_protect_ui)):
     raw = fetch_account_tx(account, limit=limit)
     txs = xrpl_json_to_transactions(account, raw)
     saved = 0
@@ -770,7 +816,7 @@ async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(req
 
 # Recent items for the dashboard (all or only alerts)
 @app.get("/uiapi/recent", include_in_schema=False)
-def ui_recent(limit: int = 50, only_alerts: bool = False, user=Depends(require_paid_or_admin)):
+def ui_recent(limit: int = 50, only_alerts: bool = False, _user=Depends(require_paid_or_admin)):
     if only_alerts:
         thr = float(os.getenv("RISK_THRESHOLD", "0.75"))
         rows = store.list_alerts(threshold=thr, limit=limit)
@@ -791,7 +837,7 @@ def ui_search_transactions(
     category: Optional[str] = None,
     risk_bucket: Optional[str] = None,  # low|medium|high
     limit: int = 1000,
-    user=Depends(require_paid_or_admin),
+    _user=Depends(require_paid_or_admin),
 ):
     rows = store.list_all(limit=10000)
 
@@ -834,7 +880,7 @@ def ui_search_transactions(
 
 # Profile / Transactions / Years + QuickBooks export
 @app.get("/uiapi/profile/years", include_in_schema=False)
-def ui_profile_years(user=Depends(require_paid_or_admin)):
+def ui_profile_years(_user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=50000)
     years = set()
     cutoff = datetime.utcnow() - timedelta(days=730)  # 2 years window
@@ -845,7 +891,7 @@ def ui_profile_years(user=Depends(require_paid_or_admin)):
     return {"years": sorted(years, reverse=True)}
 
 @app.get("/uiapi/profile/year/{year}", include_in_schema=False)
-def ui_profile_year(year: int, limit: int = 10000, user=Depends(require_paid_or_admin)):
+def ui_profile_year(year: int, limit: int = 10000, _user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=50000)
     yr_rows = []
     for r in rows:
@@ -856,8 +902,8 @@ def ui_profile_year(year: int, limit: int = 10000, user=Depends(require_paid_or_
     return {"year": int(year), "count": len(yr_rows[:limit]), "items": yr_rows[:limit]}
 
 @app.get("/uiapi/profile/year/{year}/export", include_in_schema=False)
-def ui_profile_year_export(year: int, format: str = "qb", user=Depends(require_paid_or_admin)):
-    rows = ui_profile_year(year=year, user=user)["items"]
+def ui_profile_year_export(year: int, format: str = "qb", _user=Depends(require_paid_or_admin)):
+    rows = ui_profile_year(year=year, _user=_user)["items"]
     if not rows:
         return StreamingResponse(iter([""]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=Transactions-{year}.csv"})
     df = pd.DataFrame(rows)
@@ -893,7 +939,7 @@ def ui_profile_year_export(year: int, format: str = "qb", user=Depends(require_p
 
 # ---------------- UI: Dashboard & Alerts ----------------
 @app.get("/dashboard", name="ui_dashboard", include_in_schema=False)
-def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
+def ui_dashboard(request: Request, _user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=200)
     total = len(rows)
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
@@ -904,10 +950,19 @@ def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
         c = r.get("category") or "unknown"
         cats[c] = cats.get(c, 0) + 1
     metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
-    return templates.TemplateResponse("dashboard.html", {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold})
+    resp = templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "title": "Dashboard",
+        "key": None,
+        "metrics": metrics_data,
+        "rows": rows,
+        "threshold": threshold
+    })
+    issue_csrf_cookie(resp)
+    return resp
 
 @app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
-def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
+def ui_alerts(request: Request, _user=Depends(require_paid_or_admin)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold=threshold, limit=500)
     return templates.TemplateResponse("alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows})
@@ -939,7 +994,7 @@ class NotifyRequest(BaseModel):
     email: EmailStr
 
 @app.post("/notify/test")
-def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
+def notify_test(payload: NotifyRequest = Body(...), _auth: bool = Security(enforce_api_key)):
     return _send_email("Klerno Labs Test", "✅ Your Klerno Labs email system is working!", payload.email)
 
 
@@ -963,7 +1018,7 @@ class BatchTx(BaseModel):
     items: List[Transaction]
 
 @app.post("/explain/tx")
-def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key)):
+def explain_tx_endpoint(tx: Transaction, _auth: bool = Security(enforce_api_key)):
     try:
         text = explain_tx(_dump(tx))
         return {"explanation": text}
@@ -971,7 +1026,7 @@ def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key))
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/explain/batch")
-def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_key)):
+def explain_batch_endpoint(payload: BatchTx, _auth: bool = Security(enforce_api_key)):
     try:
         txs = [_dump(t) for t in payload.items]
         result = explain_batch(txs)
@@ -980,7 +1035,7 @@ def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_k
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/ask")
-def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
+def ask_endpoint(req: AskRequest, _auth: bool = Security(enforce_api_key)):
     try:
         rows = store.list_all(limit=10000)
         spec = ask_to_filters(req.question)
@@ -992,7 +1047,7 @@ def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/explain/summary")
-def explain_summary(days: int = 7, wallet: str | None = None, auth: bool = Security(enforce_api_key)):
+def explain_summary(days: int = 7, wallet: str | None = None, _auth: bool = Security(enforce_api_key)):
     try:
         rows = store.list_by_wallet(wallet, limit=5000) if wallet else store.list_all(limit=5000)
         cutoff = datetime.utcnow() - timedelta(days=max(1, min(days, 90)))
@@ -1013,7 +1068,7 @@ class NLQRequest(BaseModel):
     query: str
 
 @app.post("/ai/nlq-to-filters", include_in_schema=False)
-def ai_nlq_to_filters(req: NLQRequest, user=Depends(require_paid_or_admin)):
+def ai_nlq_to_filters(req: NLQRequest, _user=Depends(require_paid_or_admin)):
     try:
         spec = ask_to_filters(req.query)
         return {"filters": spec}
@@ -1021,7 +1076,7 @@ def ai_nlq_to_filters(req: NLQRequest, user=Depends(require_paid_or_admin)):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/ai/search", include_in_schema=False)
-def ai_search(req: NLQRequest, user=Depends(require_paid_or_admin)):
+def ai_search(req: NLQRequest, _user=Depends(require_paid_or_admin)):
     try:
         spec = ask_to_filters(req.query)
         rows = store.list_all(limit=10000)
@@ -1032,7 +1087,7 @@ def ai_search(req: NLQRequest, user=Depends(require_paid_or_admin)):
 
 # simple anomaly scoring (z-score on amounts)
 @app.get("/ai/anomaly/scores", include_in_schema=False)
-def ai_anomaly_scores(limit: int = 100, user=Depends(require_paid_or_admin)):
+def ai_anomaly_scores(limit: int = 100, _user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=20000)
     if not rows: return {"count": 0, "items": []}
     df = pd.DataFrame(rows)
@@ -1047,19 +1102,3 @@ def ai_anomaly_scores(limit: int = 100, user=Depends(require_paid_or_admin)):
     df.sort_values(["anomaly_score", "timestamp"], ascending=[False, False], inplace=True)
     items = df.head(limit).to_dict(orient="records")
     return {"count": len(items), "items": items}
-
-
-# ---------------- Retention / Index hygiene ----------------
-@app.on_event("startup")
-async def _startup_housekeeping():
-    # keep only last 2 years; ensure helpful indexes
-    try:
-        if hasattr(store, "delete_older_than"):
-            store.delete_older_than(days=730)
-    except Exception:
-        pass
-    try:
-        if hasattr(store, "create_indexes"):
-            store.create_indexes()
-    except Exception:
-        pass
