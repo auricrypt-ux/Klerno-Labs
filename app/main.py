@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from io import StringIO
-from typing import List, Dict, Any, Optional, Callable, Awaitable
+from typing import List, Dict, Any, Optional, Callable, Awaitable, Tuple
 
 import os
 import hmac
@@ -21,6 +21,7 @@ from fastapi import (
     Depends,
     Form,
     WebSocket,
+    Response,
 )
 from fastapi.responses import (
     StreamingResponse,
@@ -32,9 +33,19 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+
+# Fast JSON (fallback to default if ORJSON not installed)
+try:
+    from fastapi.responses import ORJSONResponse as FastJSON
+    DEFAULT_RESP_CLS = FastJSON
+except Exception:
+    FastJSON = JSONResponse
+    DEFAULT_RESP_CLS = JSONResponse
 
 # NEW: for live push hub
 import asyncio, json
+from functools import lru_cache
 
 from . import store
 from .models import Transaction, TaggedTransaction, ReportRequest
@@ -204,9 +215,13 @@ async def csrf_protect_ui(request: Request):
 # =========================
 # FastAPI app + templates
 # =========================
-app = FastAPI(title="Klerno Labs API (MVP) — XRPL First")
+app = FastAPI(
+    title="Klerno Labs API (MVP) — XRPL First",
+    default_response_class=DEFAULT_RESP_CLS,
+)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=512)
 
 # Static & templates
 BASE_DIR = os.path.dirname(__file__)
@@ -689,14 +704,39 @@ def ui_export_csv_download(
 
 
 # ---------------- Metrics (JSON) ----------------
+
+# tiny in-proc TTL cache to avoid heavy recompute
+_METRICS_CACHE: Dict[Tuple[Optional[float], Optional[int]], Tuple[float, Dict[str, Any]]] = {}
+_METRICS_TTL_SEC = 5.0
+
+def _metrics_cached(threshold: Optional[float], days: Optional[int]) -> Optional[Dict[str, Any]]:
+    key = (threshold, days)
+    item = _METRICS_CACHE.get(key)
+    now = datetime.utcnow().timestamp()
+    if item and (now - item[0]) <= _METRICS_TTL_SEC:
+        return item[1]
+    return None
+
+def _metrics_put(threshold: Optional[float], days: Optional[int], data: Dict[str, Any]):
+    key = (threshold, days)
+    _METRICS_CACHE[key] = (datetime.utcnow().timestamp(), data)
+
 @app.get("/metrics")
 def metrics(threshold: float | None = None, days: int | None = None, _auth: bool = Security(enforce_api_key)):
+    cached = _metrics_cached(threshold, days)
+    if cached is not None:
+        return cached
+
     rows = store.list_all(limit=10000)
     if not rows:
-        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
+        data = {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
+        _metrics_put(threshold, days, data)
+        return data
+
     env_threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     thr = env_threshold if threshold is None else float(threshold)
     thr = max(0.0, min(1.0, thr))
+
     cutoff = None
     if days is not None:
         try:
@@ -704,23 +744,24 @@ def metrics(threshold: float | None = None, days: int | None = None, _auth: bool
             cutoff = datetime.utcnow() - timedelta(days=d)
         except Exception:
             cutoff = None
+
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
     if cutoff is not None:
         df = df[df["timestamp"] >= cutoff]
     if df.empty:
-        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
+        data = {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
+        _metrics_put(threshold, days, data)
+        return data
+
     total = int(len(df))
     alerts = int((df["risk_score"] >= thr).sum())
     avg_risk = float(df["risk_score"].mean())
 
     # categories
     categories: Dict[str, int] = {}
-    if "category" in df.columns:
-        cats_series = df["category"].fillna("unknown")
-    else:
-        cats_series = pd.Series(["unknown"] * total)
+    cats_series = (df["category"].fillna("unknown") if "category" in df.columns else pd.Series(["unknown"] * total))
     for cat, cnt in cats_series.value_counts().items():
         categories[str(cat)] = int(cnt)
 
@@ -741,7 +782,9 @@ def metrics(threshold: float | None = None, days: int | None = None, _auth: bool
             "high": int(row.get("high", 0)),
         })
 
-    return {"total": total, "alerts": alerts, "avg_risk": round(avg_risk, 3), "categories": categories, "series_by_day": series, "series_by_day_lmh": series_lmh}
+    data = {"total": total, "alerts": alerts, "avg_risk": round(avg_risk, 3), "categories": categories, "series_by_day": series, "series_by_day_lmh": series_lmh}
+    _metrics_put(threshold, days, data)
+    return data
 
 
 # ---------------- UI API (session-protected; no x-api-key) ----------------
@@ -751,7 +794,10 @@ def metrics_ui(
     days: int | None = None,
     _user=Depends(require_paid_or_admin),
 ):
-    return metrics(threshold=threshold, days=days, _auth=True)
+    resp = FastJSON(content=metrics(threshold=threshold, days=days, _auth=True))
+    # short client-side caching to cut churn
+    resp.headers["Cache-Control"] = "private, max-age=10"
+    return resp
 
 @app.get("/alerts-ui/data", include_in_schema=False)
 def alerts_ui_data(limit: int = 100, _user=Depends(require_paid_or_admin)):
@@ -1082,7 +1128,7 @@ def explain_summary(days: int = 7, wallet: str | None = None, _auth: bool = Secu
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# NLQ → filters + AI search wrappers
+# NLQ → filters + AI search wrappers (session-protected for UI)
 class NLQRequest(BaseModel):
     query: str
 
