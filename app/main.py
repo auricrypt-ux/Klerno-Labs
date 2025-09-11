@@ -30,8 +30,25 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 
-# NEW: for live push hub
+# NEW: for live push hub / tasks
 import asyncio, json
+
+# Optional: Sentry & rate limiting (safe if not installed)
+SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+try:
+    import sentry_sdk  # type: ignore
+    if SENTRY_DSN:
+        sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=0.15)
+except Exception:
+    pass
+
+try:
+    from slowapi import Limiter  # type: ignore
+    from slowapi.util import get_remote_address  # type: ignore
+    from slowapi.middleware import SlowAPIMiddleware  # type: ignore
+    limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+except Exception:
+    limiter = None
 
 from . import store
 from .models import Transaction, TaggedTransaction, ReportRequest
@@ -70,21 +87,23 @@ except ImportError:
     _llm_apply_filters = None
 
 
+# =========================
+# Helpers
+# =========================
 def _apply_filters_safe(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Fallback if llm.apply_filters isn't available."""
+    """Fallback if llm.apply_filters isn't available. Supports a few numeric/date ops."""
     if _llm_apply_filters:
         return _llm_apply_filters(rows, spec)
     if not spec:
         return rows
     out = rows
     for k, v in spec.items():
-        # simple numeric/date operators
         if k in ("min_amount", "max_amount"):
-            key = "amount"
+            akey = "amount"
             if k == "min_amount":
-                out = [r for r in out if float(r.get(key, 0) or 0) >= float(v)]
+                out = [r for r in out if float(r.get(akey, 0) or 0) >= float(v)]
             else:
-                out = [r for r in out if float(r.get(key, 0) or 0) <= float(v)]
+                out = [r for r in out if float(r.get(akey, 0) or 0) <= float(v)]
             continue
         if k in ("date_from", "date_to"):
             try:
@@ -111,22 +130,25 @@ def _dump(obj: Any) -> Dict[str, Any]:
     except Exception:
         return {"value": obj}
 
-# ---- helpers
+
 def _safe_dt(x) -> datetime:
     try:
-        return datetime.fromisoformat(str(x).replace("Z",""))
+        return datetime.fromisoformat(str(x).replace("Z", ""))
     except Exception:
         return datetime.min
 
+
 def _risk_bucket(score: float) -> str:
     s = float(score or 0)
-    if s < 0.33: return "low"
-    if s < 0.66: return "medium"
+    if s < 0.33:
+        return "low"
+    if s < 0.66:
+        return "medium"
     return "high"
 
 
-# unified, NaN-safe reader for old/new score keys
 def _row_score(r: Dict[str, Any]) -> float:
+    """unified, NaN-safe reader for old/new score keys"""
     try:
         val = r.get("score", None)
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -142,6 +164,11 @@ def _row_score(r: Dict[str, Any]) -> float:
 # FastAPI app + templates
 # =========================
 app = FastAPI(title="Klerno Labs API (MVP) — XRPL First")
+
+# Optional rate-limiting middleware
+if limiter:
+    app.state.limiter = limiter
+    app.add_middleware(SlowAPIMiddleware)
 
 # Static & templates
 BASE_DIR = os.path.dirname(__file__)
@@ -159,11 +186,13 @@ SESSION_COOKIE = os.getenv("SESSION_COOKIE_NAME", "session")
 COOKIE_SECURE_MODE = os.getenv("COOKIE_SECURE", "auto").lower()  # "auto" | "true" | "false"
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()   # "lax" | "strict" | "none"
 
+
 def _is_secure_request(request: Request) -> bool:
     xf = (request.headers.get("x-forwarded-proto") or "").lower()
     if xf:
         return "https" in xf
     return request.url.scheme == "https"
+
 
 def _cookie_kwargs(request: Request) -> Dict[str, Any]:
     if COOKIE_SECURE_MODE in ("true", "1", "yes"):
@@ -185,6 +214,7 @@ def _cookie_kwargs(request: Request) -> Dict[str, Any]:
         "path": "/",
     }
 
+
 # Include routers
 from . import paywall  # noqa: E402
 app.include_router(paywall.router)
@@ -199,7 +229,6 @@ store.init_db()
 # --- Bootstrap single admin account (email/password) ---
 BOOT_ADMIN_EMAIL = "klerno@outlook.com".lower().strip()
 BOOT_ADMIN_PASSWORD = "Labs2025"
-
 existing = store.get_user_by_email(BOOT_ADMIN_EMAIL)
 if not existing:
     store.create_user(
@@ -208,6 +237,7 @@ if not existing:
         role="admin",
         subscription_active=True,
     )
+
 
 # ---- Live push hub (WebSocket) ----------------------------------------------
 class LiveHub:
@@ -247,7 +277,9 @@ class LiveHub:
         for ws in dead:
             await self.remove(ws)
 
+
 live = LiveHub()
+
 
 @app.websocket("/ws/alerts")
 async def ws_alerts(ws: WebSocket):
@@ -268,6 +300,7 @@ async def ws_alerts(ws: WebSocket):
     finally:
         await live.remove(ws)
 
+
 # Tiny HTTP probe so hitting /ws/alerts with GET doesn't 404
 @app.get("/ws/alerts", include_in_schema=False)
 def ws_alerts_probe():
@@ -275,19 +308,32 @@ def ws_alerts_probe():
 
 
 # =========================
-# Email (SendGrid)
+# Email + optional Slack
 # =========================
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
 ALERT_FROM = os.getenv("ALERT_EMAIL_FROM", "").strip()
 ALERT_TO = os.getenv("ALERT_EMAIL_TO", "").strip()
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+
+
+def _slack_notify(text: str) -> Dict[str, Any]:
+    if not SLACK_WEBHOOK_URL:
+        return {"sent": False, "reason": "missing SLACK_WEBHOOK_URL"}
+    try:
+        import httpx  # type: ignore
+        r = httpx.post(SLACK_WEBHOOK_URL, json={"text": text}, timeout=5.0)
+        return {"sent": r.status_code == 200, "status_code": r.status_code}
+    except Exception as e:
+        return {"sent": False, "error": str(e)}
+
 
 def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict[str, Any]:
     recipient = (to_email or ALERT_TO).strip()
     if not (SENDGRID_KEY and ALERT_FROM and recipient):
         return {"sent": False, "reason": "missing SENDGRID_API_KEY/ALERT_EMAIL_FROM/ALERT_EMAIL_TO"}
     try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, Email, To, Content
+        from sendgrid import SendGridAPIClient  # type: ignore
+        from sendgrid.helpers.mail import Mail, Email, To, Content  # type: ignore
         msg = Mail(
             from_email=Email(ALERT_FROM),
             to_emails=To(recipient),
@@ -300,6 +346,7 @@ def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict
         return {"sent": ok, "status_code": resp.status_code, "to": recipient}
     except Exception as e:
         return {"sent": False, "error": str(e)}
+
 
 def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
@@ -320,7 +367,13 @@ def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
         f"Flags:      {', '.join(tagged.flags or []) or '—'}",
         f"Notes:      {getattr(tagged, 'notes', '') or '—'}",
     ]
-    return _send_email(subject, "\n".join(lines))
+    text = "\n".join(lines)
+    # fire-and-forget; don't fail the request
+    try:
+        _slack_notify(text)
+    except Exception:
+        pass
+    return _send_email(subject, text)
 
 
 # ---------------- Landing & health ----------------
@@ -328,13 +381,16 @@ def notify_if_alert(tagged: TaggedTransaction) -> Dict[str, Any]:
 def landing(request: Request):
     return templates.TemplateResponse("landing.html", {"request": request})
 
+
 @app.head("/", include_in_schema=False)
 def root_head():
     return HTMLResponse(status_code=200)
 
+
 @app.get("/health")
 def health(auth: bool = Security(enforce_api_key)):
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
 
 @app.get("/healthz", include_in_schema=False)
 def healthz():
@@ -345,6 +401,7 @@ def healthz():
 @app.get("/login", include_in_schema=False)
 def login_page(request: Request, error: str | None = None):
     return templates.TemplateResponse("login.html", {"request": request, "error": error})
+
 
 @app.post("/login", include_in_schema=False)
 def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
@@ -359,9 +416,11 @@ def login_submit(request: Request, email: str = Form(...), password: str = Form(
     resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
+
 @app.get("/signup", include_in_schema=False)
 def signup_page(request: Request, error: str | None = None):
     return templates.TemplateResponse("signup.html", {"request": request, "error": error})
+
 
 @app.post("/signup", include_in_schema=False)
 def signup_submit(request: Request, email: str = Form(...), password: str = Form(...)):
@@ -379,6 +438,7 @@ def signup_submit(request: Request, email: str = Form(...), password: str = Form
     resp.set_cookie(SESSION_COOKIE, token, **_cookie_kwargs(request))
     return resp
 
+
 @app.get("/logout", include_in_schema=False)
 def logout_ui():
     resp = RedirectResponse("/", status_code=303)
@@ -393,6 +453,7 @@ class SettingsPayload(BaseModel):
     time_range_days: Optional[int] = None
     ui_prefs: Optional[Dict[str, Any]] = None
 
+
 @app.get("/me", include_in_schema=False)
 def me(user=Depends(require_user)):
     return {
@@ -402,9 +463,11 @@ def me(user=Depends(require_user)):
         "subscription_active": bool(user.get("subscription_active")),
     }
 
+
 @app.get("/me/settings")
 def me_settings_get(user=Depends(require_user)):
     return store.get_settings(user["id"])
+
 
 @app.post("/me/settings")
 def me_settings_post(payload: SettingsPayload, user=Depends(require_user)):
@@ -426,6 +489,7 @@ def analyze_tx(tx: Transaction, auth: bool = Security(enforce_api_key)):
     category = tag_category(tx)
     return TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category)
 
+
 @app.post("/analyze/batch")
 def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)):
     tagged: List[TaggedTransaction] = []
@@ -434,6 +498,7 @@ def analyze_batch(txs: List[Transaction], auth: bool = Security(enforce_api_key)
         category = tag_category(tx)
         tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
+
 
 @app.post("/report/csv")
 def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
@@ -452,7 +517,8 @@ def report_csv(req: ReportRequest, auth: bool = Security(enforce_api_key)):
     items: List[TaggedTransaction] = []
     for _, row in selected.iterrows():
         raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
-        raw.setdefault("memo", ""); raw.setdefault("notes", "")
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
         clean = {k: v for k, v in raw.items() if k in tx_field_names}
         tx = Transaction(**clean)
         risk, flags = score_risk(tx)
@@ -472,6 +538,7 @@ def parse_xrpl(account: str, payload: List[Dict[str, Any]], auth: bool = Securit
         tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"summary": summary(tagged).model_dump(), "items": [t.model_dump() for t in tagged]}
 
+
 @app.post("/analyze/sample")
 def analyze_sample(auth: bool = Security(enforce_api_key)):
     data_path = os.path.join(BASE_DIR, "..", "data", "sample_transactions.csv")
@@ -489,7 +556,8 @@ def analyze_sample(auth: bool = Security(enforce_api_key)):
     tx_field_names = {f.name for f in dc_fields(Transaction)}
     for _, row in df.iterrows():
         raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
-        raw.setdefault("memo", ""); raw.setdefault("notes", "")
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
         clean = {k: v for k, v in raw.items() if k in tx_field_names}
         txs.append(Transaction(**clean))
     tagged: List[TaggedTransaction] = []
@@ -515,10 +583,12 @@ async def analyze_and_save_tx(tx: Transaction, auth: bool = Security(enforce_api
     email_result = notify_if_alert(tagged)
     return {"saved": True, "item": d, "email": email_result}
 
+
 @app.get("/transactions/{wallet}")
 def get_transactions_for_wallet(wallet: str, limit: int = 100, auth: bool = Security(enforce_api_key)):
     rows = store.list_by_wallet(wallet, limit=limit)
     return {"wallet": wallet, "count": len(rows), "items": rows}
+
 
 @app.get("/alerts")
 def get_alerts(limit: int = 100, auth: bool = Security(enforce_api_key)):
@@ -538,6 +608,7 @@ def xrpl_fetch(account: str, limit: int = 10, auth: bool = Security(enforce_api_
         category = tag_category(tx)
         tagged.append(TaggedTransaction(**_dump(tx), score=risk, flags=flags, category=category))
     return {"count": len(tagged), "items": [t.model_dump() for t in tagged]}
+
 
 @app.post("/integrations/xrpl/fetch_and_save")
 async def xrpl_fetch_and_save(account: str, limit: int = 10, auth: bool = Security(enforce_api_key)):
@@ -587,6 +658,7 @@ def _check_key_param_or_header(key: Optional[str] = None, x_api_key: Optional[st
     if exp and incoming != exp:
         raise HTTPException(status_code=401, detail="unauthorized")
 
+
 @app.get("/export/csv/download")
 def export_csv_download(wallet: str | None = None, limit: int = 1000, key: Optional[str] = None, x_api_key: Optional[str] = Header(None)):
     _check_key_param_or_header(key=key, x_api_key=x_api_key)
@@ -603,10 +675,18 @@ def export_csv_download(wallet: str | None = None, limit: int = 1000, key: Optio
 def metrics(threshold: float | None = None, days: int | None = None, auth: bool = Security(enforce_api_key)):
     rows = store.list_all(limit=10000)
     if not rows:
-        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
+        return {
+            "total": 0,
+            "alerts": 0,
+            "avg_risk": 0,
+            "categories": {},
+            "series_by_day": [],
+            "series_by_day_lmh": [],
+        }
     env_threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     thr = env_threshold if threshold is None else float(threshold)
     thr = max(0.0, min(1.0, thr))
+
     cutoff = None
     if days is not None:
         try:
@@ -614,13 +694,24 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
             cutoff = datetime.utcnow() - timedelta(days=d)
         except Exception:
             cutoff = None
+
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["risk_score"] = df.apply(lambda rr: _row_score(rr), axis=1)
+
     if cutoff is not None:
         df = df[df["timestamp"] >= cutoff]
+
     if df.empty:
-        return {"total": 0, "alerts": 0, "avg_risk": 0, "categories": {}, "series_by_day": [], "series_by_day_lmh": []}
+        return {
+            "total": 0,
+            "alerts": 0,
+            "avg_risk": 0,
+            "categories": {},
+            "series_by_day": [],
+            "series_by_day_lmh": [],
+        }
+
     total = int(len(df))
     alerts = int((df["risk_score"] >= thr).sum())
     avg_risk = float(df["risk_score"].mean())
@@ -651,7 +742,14 @@ def metrics(threshold: float | None = None, days: int | None = None, auth: bool 
             "high": int(row.get("high", 0)),
         })
 
-    return {"total": total, "alerts": alerts, "avg_risk": round(avg_risk, 3), "categories": categories, "series_by_day": series, "series_by_day_lmh": series_lmh}
+    return {
+        "total": total,
+        "alerts": alerts,
+        "avg_risk": round(avg_risk, 3),
+        "categories": categories,
+        "series_by_day": series,
+        "series_by_day_lmh": series_lmh,
+    }
 
 
 # ---------------- UI API (session-protected; no x-api-key) ----------------
@@ -661,13 +759,16 @@ def metrics_ui(
     days: int | None = None,
     user=Depends(require_paid_or_admin),
 ):
+    # reuse same structure, so dashboard can consume series_by_day_lmh
     return metrics(threshold=threshold, days=days, auth=True)
+
 
 @app.get("/alerts-ui/data", include_in_schema=False)
 def alerts_ui_data(limit: int = 100, user=Depends(require_paid_or_admin)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold, limit=limit)
     return {"threshold": threshold, "count": len(rows), "items": rows}
+
 
 # Save demo/sample data to DB so dashboard shows data, and live-push
 @app.post("/uiapi/analyze/sample", include_in_schema=False)
@@ -693,7 +794,8 @@ async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
 
     for _, row in df.iterrows():
         raw = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
-        raw.setdefault("memo", ""); raw.setdefault("notes", "")
+        raw.setdefault("memo", "")
+        raw.setdefault("notes", "")
         clean = {k: v for k, v in raw.items() if k in tx_field_names}
         tx = Transaction(**clean)
 
@@ -711,6 +813,7 @@ async def ui_analyze_sample(user=Depends(require_paid_or_admin)):
         await live.publish(d)
 
     return {"summary": summary(tagged).model_dump(), "saved": saved, "items": [t.model_dump() for t in tagged]}
+
 
 # Session-protected XRPL fetch used by the dashboard button
 @app.post("/uiapi/integrations/xrpl/fetch_and_save", include_in_schema=False)
@@ -743,6 +846,7 @@ async def ui_xrpl_fetch_and_save(account: str, limit: int = 10, user=Depends(req
         "emails": emails,
     }
 
+
 # Recent items for the dashboard (all or only alerts)
 @app.get("/uiapi/recent", include_in_schema=False)
 def ui_recent(limit: int = 50, only_alerts: bool = False, user=Depends(require_paid_or_admin)):
@@ -753,12 +857,13 @@ def ui_recent(limit: int = 50, only_alerts: bool = False, user=Depends(require_p
         rows = store.list_all(limit=limit)
     return {"items": rows}
 
+
 # Powerful transactions search for folders + filters UI
 @app.get("/uiapi/transactions/search", include_in_schema=False)
 def ui_search_transactions(
     wallet_from: Optional[str] = None,
     wallet_to: Optional[str] = None,
-    tx_type: Optional[str] = None,   # 'sale'|'purchase' -> 'out'|'in'; or 'in'|'out'
+    tx_type: Optional[str] = None,   # 'sale'|'purchase' or 'in'|'out'
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     min_amount: Optional[float] = None,
@@ -771,41 +876,55 @@ def ui_search_transactions(
     rows = store.list_all(limit=10000)
 
     def _type_ok(r):
-        if not tx_type: return True
+        if not tx_type:
+            return True
         t = tx_type.lower().strip()
         want = {"sale": "out", "purchase": "in"}.get(t, t)
-        return str(r.get("direction","")).lower() == want
+        return str(r.get("direction", "")).lower() == want
 
     def _between_dt(r):
         ts = _safe_dt(r.get("timestamp"))
-        if date_from and ts < _safe_dt(date_from): return False
-        if date_to and ts > _safe_dt(date_to): return False
+        if date_from and ts < _safe_dt(date_from):
+            return False
+        if date_to and ts > _safe_dt(date_to):
+            return False
         return True
 
     def _amt_ok(r):
         a = float(r.get("amount") or 0)
-        if min_amount is not None and a < float(min_amount): return False
-        if max_amount is not None and a > float(max_amount): return False
+        if min_amount is not None and a < float(min_amount):
+            return False
+        if max_amount is not None and a > float(max_amount):
+            return False
         return True
 
     def _bucket_ok(r):
-        if not risk_bucket: return True
+        if not risk_bucket:
+            return True
         b = r.get("risk_bucket") or _risk_bucket(_row_score(r))
         return str(b).lower() == risk_bucket.lower()
 
     sel = []
     for r in rows:
-        if wallet_from and str(r.get("from_addr","")).lower() != wallet_from.lower(): continue
-        if wallet_to   and str(r.get("to_addr","")).lower()   != wallet_to.lower():   continue
-        if category and str(r.get("category","")).lower() != category.lower():       continue
-        if not _type_ok(r): continue
-        if not _between_dt(r): continue
-        if not _amt_ok(r): continue
-        if not _bucket_ok(r): continue
+        if wallet_from and str(r.get("from_addr", "")).lower() != wallet_from.lower():
+            continue
+        if wallet_to and str(r.get("to_addr", "")).lower() != wallet_to.lower():
+            continue
+        if category and str(r.get("category", "")).lower() != category.lower():
+            continue
+        if not _type_ok(r):
+            continue
+        if not _between_dt(r):
+            continue
+        if not _amt_ok(r):
+            continue
+        if not _bucket_ok(r):
+            continue
         sel.append(r)
 
     sel.sort(key=lambda x: _safe_dt(x.get("timestamp")), reverse=True)
     return {"count": len(sel[:limit]), "items": sel[:limit]}
+
 
 # Profile / Transactions / Years + QuickBooks export
 @app.get("/uiapi/profile/years", include_in_schema=False)
@@ -819,6 +938,7 @@ def ui_profile_years(user=Depends(require_paid_or_admin)):
             years.add(ts.year)
     return {"years": sorted(years, reverse=True)}
 
+
 @app.get("/uiapi/profile/year/{year}", include_in_schema=False)
 def ui_profile_year(year: int, limit: int = 10000, user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=50000)
@@ -830,15 +950,20 @@ def ui_profile_year(year: int, limit: int = 10000, user=Depends(require_paid_or_
     yr_rows.sort(key=lambda x: _safe_dt(x.get("timestamp")), reverse=True)
     return {"year": int(year), "count": len(yr_rows[:limit]), "items": yr_rows[:limit]}
 
+
 @app.get("/uiapi/profile/year/{year}/export", include_in_schema=False)
 def ui_profile_year_export(year: int, format: str = "qb", user=Depends(require_paid_or_admin)):
     rows = ui_profile_year(year=year, user=user)["items"]
     if not rows:
-        return StreamingResponse(iter([""]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=Transactions-{year}.csv"})
+        return StreamingResponse(
+            iter([""]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=Transactions-{year}.csv"},
+        )
     df = pd.DataFrame(rows)
-
-    for c in ("timestamp","tx_id","from_addr","to_addr","amount","symbol","direction","fee","category","memo","notes","risk_score"):
-        if c not in df.columns: df[c] = None
+    for c in ("timestamp", "tx_id", "from_addr", "to_addr", "amount", "symbol", "direction", "fee", "category", "memo", "notes", "risk_score"):
+        if c not in df.columns:
+            df[c] = None
 
     out = pd.DataFrame({
         "Date": pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d"),
@@ -879,13 +1004,27 @@ def ui_dashboard(request: Request, user=Depends(require_paid_or_admin)):
         c = r.get("category") or "unknown"
         cats[c] = cats.get(c, 0) + 1
     metrics_data = {"total": total, "alerts": len(alerts), "avg_risk": avg_risk, "categories": cats}
-    return templates.TemplateResponse("dashboard.html", {"request": request, "title": "Dashboard", "key": None, "metrics": metrics_data, "rows": rows, "threshold": threshold})
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "title": "Dashboard",
+            "key": None,
+            "metrics": metrics_data,
+            "rows": rows,
+            "threshold": threshold,
+        },
+    )
+
 
 @app.get("/alerts-ui", name="ui_alerts", include_in_schema=False)
 def ui_alerts(request: Request, user=Depends(require_paid_or_admin)):
     threshold = float(os.getenv("RISK_THRESHOLD", "0.75"))
     rows = store.list_alerts(threshold=threshold, limit=500)
-    return templates.TemplateResponse("alerts.html", {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows})
+    return templates.TemplateResponse(
+        "alerts.html",
+        {"request": request, "title": f"Alerts (≥ {threshold})", "key": None, "rows": rows},
+    )
 
 
 # ---------------- Admin / Email tests ----------------
@@ -910,8 +1049,10 @@ def admin_test_email(request: Request):
     tagged = TaggedTransaction(**_dump(tx), score=0.99, flags=["test_high_risk"], category="test-alert")
     return {"ok": True, "email": notify_if_alert(tagged)}
 
+
 class NotifyRequest(BaseModel):
     email: EmailStr
+
 
 @app.post("/notify/test")
 def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforce_api_key)):
@@ -923,7 +1064,13 @@ def notify_test(payload: NotifyRequest = Body(...), auth: bool = Security(enforc
 def debug_api_key(x_api_key: str | None = Header(default=None)):
     exp = expected_api_key()
     preview = (exp[:4] + "..." + exp[-4:]) if exp else ""
-    return {"received_header": x_api_key, "expected_loaded_from_env": bool(exp), "expected_length": len(exp or ""), "expected_preview": preview}
+    return {
+        "received_header": x_api_key,
+        "expected_loaded_from_env": bool(exp),
+        "expected_length": len(exp or ""),
+        "expected_preview": preview,
+    }
+
 
 @app.get("/_debug/routes", include_in_schema=False)
 def list_routes():
@@ -934,8 +1081,10 @@ def list_routes():
 class AskRequest(BaseModel):
     question: str
 
+
 class BatchTx(BaseModel):
     items: List[Transaction]
+
 
 @app.post("/explain/tx")
 def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key)):
@@ -945,6 +1094,7 @@ def explain_tx_endpoint(tx: Transaction, auth: bool = Security(enforce_api_key))
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
 @app.post("/explain/batch")
 def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_key)):
     try:
@@ -953,6 +1103,7 @@ def explain_batch_endpoint(payload: BatchTx, auth: bool = Security(enforce_api_k
         return result
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.post("/ask")
 def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
@@ -965,6 +1116,7 @@ def ask_endpoint(req: AskRequest, auth: bool = Security(enforce_api_key)):
         return {"filters": spec, "count": len(filtered), "preview": preview, "answer": answer}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.get("/explain/summary")
 def explain_summary(days: int = 7, wallet: str | None = None, auth: bool = Security(enforce_api_key)):
@@ -983,9 +1135,11 @@ def explain_summary(days: int = 7, wallet: str | None = None, auth: bool = Secur
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
 # NLQ → filters + AI search wrappers
 class NLQRequest(BaseModel):
     query: str
+
 
 @app.post("/ai/nlq-to-filters", include_in_schema=False)
 def ai_nlq_to_filters(req: NLQRequest, user=Depends(require_paid_or_admin)):
@@ -994,6 +1148,7 @@ def ai_nlq_to_filters(req: NLQRequest, user=Depends(require_paid_or_admin)):
         return {"filters": spec}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.post("/ai/search", include_in_schema=False)
 def ai_search(req: NLQRequest, user=Depends(require_paid_or_admin)):
@@ -1005,13 +1160,16 @@ def ai_search(req: NLQRequest, user=Depends(require_paid_or_admin)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
 # simple anomaly scoring (z-score on amounts)
 @app.get("/ai/anomaly/scores", include_in_schema=False)
 def ai_anomaly_scores(limit: int = 100, user=Depends(require_paid_or_admin)):
     rows = store.list_all(limit=20000)
-    if not rows: return {"count": 0, "items": []}
+    if not rows:
+        return {"count": 0, "items": []}
     df = pd.DataFrame(rows)
-    if "amount" not in df.columns: return {"count": 0, "items": []}
+    if "amount" not in df.columns:
+        return {"count": 0, "items": []}
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
     if df["amount"].std(ddof=0) == 0:
@@ -1022,3 +1180,20 @@ def ai_anomaly_scores(limit: int = 100, user=Depends(require_paid_or_admin)):
     df.sort_values(["anomaly_score", "timestamp"], ascending=[False, False], inplace=True)
     items = df.head(limit).to_dict(orient="records")
     return {"count": len(items), "items": items}
+
+
+# ---------------- Background maintenance (2-year retention) ----------------
+async def _daily_prune():
+    while True:
+        try:
+            # implement in store.py so this call removes items older than 730 days
+            if hasattr(store, "prune_older_than"):
+                store.prune_older_than(730)
+        except Exception:
+            pass
+        await asyncio.sleep(24 * 3600)
+
+
+@app.on_event("startup")
+async def _boot_tasks():
+    asyncio.create_task(_daily_prune())
