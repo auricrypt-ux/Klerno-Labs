@@ -1,38 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
+<h1 class="h4 mb-3">{{ title or "Alerts" }}</h1>
 
-<h1 class="text-2xl font-semibold mb-4">Alerts (≥ {{ threshold }})</h1>
-
-{% if rows %}
-  <div class="grid gap-4">
-    {% for r in rows %}
-      <div class="card p-4">
-        <div class="flex items-center justify-between">
-          <div class="font-semibold">{{ r.get('category') or 'unknown' }}</div>
-          <div class="text-sm text-[var(--muted)]">{{ r.get('timestamp') }}</div>
-        </div>
-
-        <div class="mt-2 text-sm">
-          <div><span class="text-[var(--muted)]">Tx:</span> {{ r.get('tx_id') }}</div>
-          <div class="truncate"><span class="text-[var(--muted)]">From → To:</span> {{ r.get('from_addr') }} → {{ r.get('to_addr') }}</div>
-          <div><span class="text-[var(--muted)]">Amount:</span> {{ r.get('amount') }} {{ r.get('symbol') or '' }}</div>
-          <div>
-            <span class="text-[var(--muted)]">Risk:</span>
-            <span class="font-semibold text-[var(--danger)]">{{ "%.3f"|format(r.get('risk_score') or 0) }}</span>
-          </div>
-          {% set flags = r.get('risk_flags') or [] %}
-          <div class="mt-2 flex flex-wrap gap-2">
-            {% for f in flags %}
-              <span class="chip px-2 py-0.5 rounded text-xs">{{ f }}</span>
-            {% endfor %}
-            {% if not flags %}<span class="text-[var(--muted)]">No flags</span>{% endif %}
-          </div>
-        </div>
-      </div>
-    {% endfor %}
-  </div>
-{% else %}
-  <div class="card p-6 text-[var(--muted)]">No alerts yet.</div>
-{% endif %}
-
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ (r.timestamp or '')[:19].replace('T',' ') }}</td>
+          <td>{{ (r.from_addr or '')[:6] }}… → {{ (r.to_addr or '')[:6] }}…</td>
+          <td>{{ '%.2f'|format(r.amount or 0) }} {{ r.symbol or '' }}</td>
+          <td><span class="badge k-badge">{{ r.category or 'unknown' }}</span></td>
+          <td class="{{ 'text-warning' if (r.risk_score or r.score or 0) >= 0.75 else 'text-success' }}">
+            {{ '%.3f'|format((r.risk_score or r.score or 0)) }}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="text-muted">No alerts.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

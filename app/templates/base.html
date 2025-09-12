@@ -1,75 +1,106 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-app="klerno">
 <head>
   <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, maximum-scale=1"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
   <title>{{ title or "Klerno Labs" }}</title>
 
-  <!-- Tailwind via CDN (no build step) -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Bootstrap 5 (CDN) with safe local fallback via data-fallback (no Jinja inside JS strings) -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+    integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+    crossorigin="anonymous"
+    data-fallback="{{ url_path_for('static', path='css/bootstrap.min.css') }}"
+    onerror="this.removeAttribute('onerror'); this.href=this.dataset.fallback"
+  />
 
-  <!-- Chart.js for sparkline/line charts -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Your small app overrides (optional local file) -->
+  <link rel="stylesheet" href="{{ url_path_for('static', path='css/app.css') }}" />
+
+  <!-- Chart.js (for charts that child templates may render) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
-    :root {
-      --bg: #0b1020;
-      --panel: #121a34;
-      --line: #1e2a52;
-      --ink: #e8ecf3;
-      --muted: #9aa9c6;
-      --brand: #6c63ff;
-      --danger: #ff5577;
-      --ok: #10b981;
-      --warn: #f59e0b;
+    :root{
+      --bg:#0b1020; --panel:#121a34; --line:#1e2a52; --ink:#e8ecf3;
+      --muted:#9aa9c6; --brand:#6c63ff; --danger:#ff5577; --ok:#10b981; --warn:#f59e0b;
     }
-    body { background: var(--bg); color: var(--ink); }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
-    .chip { border: 1px solid var(--line); background: rgba(255,255,255,0.03); }
-    .pill { background: rgba(255,255,255,0.06); }
+    body{ background:var(--bg); color:var(--ink); }
+    .border-line{ border-color:var(--line)!important; }
+    .card{ background:var(--panel); border:1px solid var(--line); border-radius:16px; }
+    .chip{ border:1px solid var(--line); background:rgba(255,255,255,0.03); border-radius:.5rem; padding:.375rem .75rem; display:inline-block }
+    .pill{ background:rgba(255,255,255,0.06); border-radius:999px; padding:.25rem .625rem; }
+    .navbar .navbar-toggler-icon{ filter: invert(1); }
   </style>
 </head>
-<body class="min-h-screen">
-  <header class="border-b border-[var(--line)]">
-    <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-      <a href="{{ url_path_for('ui_dashboard') }}" class="text-xl font-semibold hover:opacity-90">Klerno Labs</a>
-      <nav class="flex items-center gap-2">
-        <a id="nav-dashboard" class="px-3 py-1.5 rounded-md chip hover:opacity-90" href="{{ url_path_for('ui_dashboard') }}">Dashboard</a>
-        <a id="nav-alerts" class="px-3 py-1.5 rounded-md chip hover:opacity-90" href="{{ url_path_for('ui_alerts') }}">Alerts</a>
-        <a class="px-3 py-1.5 rounded-md chip hover:opacity-90" href="/docs" target="_blank" rel="noopener">API Docs</a>
-      </nav>
-    </div>
+
+<body class="min-vh-100 d-flex flex-column">
+  <!-- Header / Nav -->
+  <header class="border-bottom border-line sticky-top" style="backdrop-filter:saturate(140%) blur(8px); background:rgba(0,0,0,.25)">
+    <nav class="navbar navbar-expand-lg">
+      <div class="container-fluid">
+        <a href="{{ url_path_for('ui_dashboard') }}" class="navbar-brand text-light fw-semibold">Klerno Labs</a>
+
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav"
+                aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <div id="mainNav" class="collapse navbar-collapse">
+          <ul class="navbar-nav ms-auto gap-2">
+            <li class="nav-item">
+              <a id="nav-dashboard" class="nav-link text-light chip" href="{{ url_path_for('ui_dashboard') }}">Dashboard</a>
+            </li>
+            <li class="nav-item">
+              <a id="nav-alerts" class="nav-link text-light chip" href="{{ url_path_for('ui_alerts') }}">Alerts</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link text-light chip" href="/docs" target="_blank" rel="noopener">API Docs</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
   </header>
 
-  <main class="max-w-7xl mx-auto px-4 py-6">
+  <!-- Main content -->
+  <main class="container flex-grow-1 py-4">
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="max-w-7xl mx-auto px-4 pb-8 text-sm text-[var(--muted)]">
-    <div class="flex items-center justify-between">
+  <!-- Footer -->
+  <footer class="container pb-4" style="color:var(--muted)">
+    <div class="d-flex align-items-center justify-content-between">
       <span>© {{ (now().year if now else 2025) }} Klerno Labs — Klerno Labs</span>
-      <span class="opacity-80">XRPL-first • Risk & Alerts</span>
+      <span class="opacity-75">XRPL-first • Risk & Alerts</span>
     </div>
   </footer>
 
+  <!-- Carry ?key=... through internal links so UI pages remain authorized -->
   <script>
-    // Carry ?key=... through internal links so UI pages remain authorized
-    (function attachKeyToLinks() {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const key = params.get("key");
-        if (!key) return;
+  (function attachKeyToLinks(){
+    try{
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key");
+      if(!key) return;
+      for(const a of document.querySelectorAll('a[href^="/"]')){
+        const url = new URL(a.getAttribute("href"), window.location.origin);
+        url.searchParams.set("key", key);
+        a.setAttribute("href", url.toString());
+      }
+    }catch{}
+  })();
+  </script>
 
-        for (const a of document.querySelectorAll('a[href^="/"]')) {
-          const url = new URL(a.getAttribute("href"), window.location.origin);
-          url.searchParams.set("key", key);
-          a.setAttribute("href", url.toString());
-        }
-      } catch {}
-    })();
+  <!-- Bootstrap Bundle (CDN) with safe local fallback -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+    crossorigin="anonymous"
+    data-fallback="{{ url_path_for('static', path='js/bootstrap.bundle.min.js') }}"
+    onerror="this.removeAttribute('onerror'); this.src=this.dataset.fallback">
   </script>
 
   {% block scripts %}{% endblock %}

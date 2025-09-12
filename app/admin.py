@@ -24,7 +24,6 @@ DEFAULT_TO   = os.getenv("ALERT_EMAIL_TO", "").strip()
 BASE_DIR = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-# SINGLE router for this module
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 # ---------- Auth helpers ----------
@@ -36,6 +35,7 @@ def require_admin(user=Depends(require_user)):
 
 # ---------- Utils ----------
 def _row_score(r: Dict[str, Any]) -> float:
+    """NaN-safe getter for risk score."""
     try:
         val = r.get("score", None)
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -99,7 +99,6 @@ def admin_stats(user=Depends(require_admin)):
 
 # ---------- Users ----------
 def _list_users() -> List[Dict[str, Any]]:
-    # Uses store._conn() to avoid adding a new store API surface
     con = store._conn()
     cur = con.cursor()
     cur.execute("""
@@ -112,24 +111,19 @@ def _list_users() -> List[Dict[str, Any]]:
 
     out: List[Dict[str, Any]] = []
     for r in rows:
-        # support sqlite3.Row/psycopg rows/dicts
         if isinstance(r, dict):
             d = dict(r)
         elif hasattr(r, "keys"):
             d = {k: r[k] for k in r.keys()}
         else:
-            # Fallback: assume order matches the SELECT
+            # Fallback to positional tuple order
             id_, email, password_hash, role, sub_active, created_at = r
             d = {
-                "id": id_,
-                "email": email,
-                "password_hash": password_hash,
-                "role": role,
-                "subscription_active": sub_active,
-                "created_at": created_at,
+                "id": id_, "email": email, "password_hash": password_hash,
+                "role": role, "subscription_active": sub_active, "created_at": created_at,
             }
         d["subscription_active"] = bool(d.get("subscription_active"))
-        d.pop("password_hash", None)  # never return hashes
+        d.pop("password_hash", None)  # never expose hashes
         out.append(d)
     return out
 
@@ -176,7 +170,6 @@ def admin_seed_demo(payload: SeedDemoPayload = Body(default=None), user=Depends(
     if payload and payload.limit:
         df = df.head(int(payload.limit))
 
-    # Normalize
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
     for col in ("memo", "notes", "symbol", "direction", "chain", "tx_id", "from_addr", "to_addr"):
@@ -204,12 +197,7 @@ def admin_seed_demo(payload: SeedDemoPayload = Body(default=None), user=Depends(
         }
         risk, flags = score_risk(tx)
         cat = tx.get("category") or tag_category(tx)
-        d = {
-            **tx,
-            "risk_score": risk,
-            "risk_flags": flags,
-            "category": cat,
-        }
+        d = {**tx, "risk_score": risk, "risk_flags": flags, "category": cat}
         store.save_tagged(d)
         saved += 1
 
@@ -259,16 +247,9 @@ class ApiKeyRotateResponse(BaseModel):
 
 @router.post("/api-key/rotate", response_model=ApiKeyRotateResponse)
 def admin_rotate_api_key(user=Depends(require_admin)):
-    """
-    Generates a fresh API key and persists it to data/api_key.secret.
-    NOTE: If you set X_API_KEY in ENV, that still takes precedence.
-    """
     new_key = rotate_api_key()
     return {"api_key": new_key}
 
 @router.get("/api-key/preview")
 def admin_preview_api_key(user=Depends(require_admin)):
-    """
-    Returns masked preview & metadata, never the full key.
-    """
     return preview_api_key()

@@ -1,556 +1,504 @@
-<!doctype html>
-<html lang="en" data-app="klerno-shell">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{{ title or "Dashboard" }} — Klerno Labs</title>
-  <meta name="color-scheme" content="dark light">
-  <style>
-    :root{
-      --bg:#0b1020; --panel:#111831; --panel-2:#0f152c; --line:#1e2a52; --ink:#e8ecf3;
-      --muted:#9aa9c6; --cta:#6c63ff; --primary:#6c63ff; --good:#2ecc71; --warn:#ffa940; --err:#ef4444;
-      --radius:14px; --gap:14px; --pad:16px; --focus: 0 0 0 3px rgba(108,99,255,.55);
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      background:var(--bg); color:var(--ink);
-      -webkit-tap-highlight-color:transparent;
-    }
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* keep your vibe + background layer */
+  canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
+  .vignette{
+    position:fixed; inset:0; z-index:1; pointer-events:none;
+    background:radial-gradient(1200px 600px at 70% 20%,transparent 0%,rgba(0,0,0,.35) 70%,rgba(0,0,0,.7) 100%);
+    mix-blend-mode:multiply;
+  }
+  /* cards already themed via base.css tokens; these tighten spacing a bit */
+  .k-card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+  .k-badge{ border:1px solid var(--line); color:#cfe1ff; background:rgba(255,255,255,.04); }
+</style>
 
-    canvas#bg{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
-    .vignette{
-      position:fixed; inset:0; z-index:1; pointer-events:none;
-      background:radial-gradient(1200px 600px at 70% 20%,transparent 0%,rgba(0,0,0,.35) 70%,rgba(0,0,0,.7) 100%);
-      mix-blend-mode:multiply;
-    }
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="vignette" aria-hidden="true"></div>
 
-    header{
-      position:sticky; top:0; z-index:40;
-      backdrop-filter:saturate(140%) blur(8px);
-      background:linear-gradient(180deg, rgba(0,0,0,.30), rgba(0,0,0,.00));
-      border-bottom:1px solid var(--line);
-    }
-    .hdr{display:flex; align-items:center; gap:10px; padding:10px var(--pad); max-width:1100px; margin:0 auto}
-    .brand{display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--ink)}
-    .brand .wordmark{height:28px; display:block; filter:drop-shadow(0 2px 10px rgba(108,99,255,.25))}
-    @media (min-width:900px){ .brand .wordmark{ height:32px } }
-    .spacer{flex:1}
-    .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px;
-      padding:10px 14px; min-height:44px; border-radius:10px; border:1px solid var(--line);
-      background:#151e3c; color:var(--ink); text-decoration:none; cursor:pointer}
-    .btn.ghost{background:transparent}
-    .btn.primary{background:var(--cta); border-color:#574bdb; color:white}
-    .btn:focus-visible{ outline:none; box-shadow:var(--focus) }
-
-    .tabsbar{
-      position:sticky; top:56px; z-index:35; border-bottom:1px solid var(--line);
-      background:rgba(0,0,0,.25); backdrop-filter: blur(6px);
-    }
-    .tabs{
-      display:flex; gap:6px; max-width:1100px; margin:0 auto; padding:8px var(--pad);
-      overflow:auto;
-    }
-    .tab{
-      appearance:none; border:1px solid var(--line); background:var(--panel);
-      color:var(--muted); padding:10px 12px; border-radius:10px; cursor:pointer;
-      white-space:nowrap;
-    }
-    .tab[aria-selected="true"]{ color:#fff; background:linear-gradient(0deg, rgba(108,99,255,.18), rgba(108,99,255,.18)) }
-    .tab:focus-visible{ outline:none; box-shadow:inset 0 0 0 2px rgba(255,255,255,.06), var(--focus) }
-    .tab--admin{ display:none }
-    body[data-role="admin"] .tab--admin{ display:inline-flex }
-
-    main{ max-width:1100px; margin:0 auto; padding:var(--gap); position:relative; z-index:2 }
-    .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px}
-    .row{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0}
-    @media (max-width:920px){ .row{grid-template-columns:1fr} }
-    .kpi{font-size:28px; font-weight:700; letter-spacing:-.02em}
-    .muted{color:var(--muted)}
-    .actions{display:flex; gap:10px; flex-wrap:wrap}
-
-    .grid2{ display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:14px; align-items:start; }
-    .grid2 > .card{ min-width:0; }
-
-    @media (max-width:920px){ .grid2{grid-template-columns:1fr} }
-    canvas{width:100%; height:220px; display:block}
-    table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden}
-    th,td{padding:10px 12px; border-bottom:1px solid var(--line); font-size:14px}
-    th{background:#0f1630; text-align:left; color:#cbd5f7}
-    tr:last-child td{border-bottom:none}
-    .tag{padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#cfe1ff}
-    .ok{color:var(--good)} .warn{color:var(--warn)}
-    .note{font-size:12px; color:var(--muted)}
-
-    .toasts{position:fixed; right:16px; bottom:16px; display:grid; gap:8px; z-index:70}
-    .toast{padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:rgba(0,0,0,.6); color:#fff; max-width:min(90vw,360px)}
-    .toast.ok{border-color:rgba(52,211,153,.4)}
-    .toast.err{border-color:rgba(239,68,68,.5)}
-    .toast.warn{border-color:rgba(255,169,64,.5)}
-  </style>
-</head>
-<body data-role="" data-active="">
-  <canvas id="bg" aria-hidden="true"></canvas>
-  <div class="vignette" aria-hidden="true"></div>
-
-  <header>
-    <div class="hdr">
-      <a class="brand" href="#home" aria-label="Klerno Home">
-        <img class="wordmark" src="{{ url_path_for('static', path='klerno-wordmark.png') }}" alt="Klerno Labs">
-      </a>
-      <div class="spacer"></div>
-    </div>
-  </header>
-
-  <div class="tabsbar">
-    <nav id="tabs" class="tabs" role="tablist" aria-label="Primary">
-      <button id="tab-home"    class="tab" role="tab" aria-controls="panel-home"    aria-selected="false" tabindex="-1">Home</button>
-      <button id="tab-explore" class="tab" role="tab" aria-controls="panel-explore" aria-selected="false" tabindex="-1">Explore</button>
-      <button id="tab-create"  class="tab" role="tab" aria-controls="panel-create"  aria-selected="false" tabindex="-1">Create</button>
-      <button id="tab-alerts"  class="tab" role="tab" aria-controls="panel-alerts"  aria-selected="false" tabindex="-1">Alerts</button>
-      <button id="tab-profile" class="tab" role="tab" aria-controls="panel-profile" aria-selected="false" tabindex="-1">Profile</button>
-      <button id="tab-admin"   class="tab tab--admin" role="tab" aria-controls="panel-admin" aria-selected="false" tabindex="-1">Admin</button>
+<header class="mb-2" aria-label="secondary">
+  <!-- Tabs bar (preserve IDs & roles exactly as your JS expects) -->
+  <div class="border-bottom border-line sticky-top" style="top: 56px; backdrop-filter: blur(6px); background:rgba(0,0,0,.25)">
+    <nav id="tabs" class="nav nav-pills gap-2 container py-2" role="tablist" aria-label="Primary">
+      <button id="tab-home"    class="btn btn-sm chip"        role="tab" aria-controls="panel-home"    aria-selected="false" tabindex="-1">Home</button>
+      <button id="tab-explore" class="btn btn-sm chip"        role="tab" aria-controls="panel-explore" aria-selected="false" tabindex="-1">Explore</button>
+      <button id="tab-create"  class="btn btn-sm chip"        role="tab" aria-controls="panel-create"  aria-selected="false" tabindex="-1">Create</button>
+      <button id="tab-alerts"  class="btn btn-sm chip"        role="tab" aria-controls="panel-alerts"  aria-selected="false" tabindex="-1">Alerts</button>
+      <button id="tab-profile" class="btn btn-sm chip"        role="tab" aria-controls="panel-profile" aria-selected="false" tabindex="-1">Profile</button>
+      <button id="tab-admin"   class="btn btn-sm chip tab--admin" role="tab" aria-controls="panel-admin" aria-selected="false" tabindex="-1">Admin</button>
     </nav>
   </div>
+</header>
 
-  <main id="main" tabindex="-1">
-    <!-- HOME -->
-    <section id="panel-home" role="tabpanel" aria-labelledby="tab-home" hidden>
-      <div class="row">
-        <div class="card"><div class="muted">Total processed</div><div class="kpi" id="kpiTotal">—</div></div>
-        <div class="card"><div class="muted">Alerts ≥ threshold</div><div class="kpi" id="kpiAlerts">—</div></div>
-        <div class="card"><div class="muted">Average risk <small id="kpiAvgDelta" class="muted"></small></div><div class="kpi" id="kpiAvg">—</div></div>
-      </div>
-
-      <div class="grid2">
-        <div class="card">
-          <div class="muted" style="margin-bottom:8px;">Average risk by day</div>
-          <canvas id="chartRisk"></canvas>
-          <div class="note">Canvas chart from <code>/metrics-ui.series_by_day</code>.</div>
+<main id="main" tabindex="-1" class="position-relative" style="z-index:2">
+  <!-- HOME -->
+  <section id="panel-home" role="tabpanel" aria-labelledby="tab-home" hidden>
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="k-card p-3">
+          <div class="text-muted mb-1">Total processed</div>
+          <div class="fs-3 fw-bold" id="kpiTotal">—</div>
         </div>
-        <div class="card">
-          <div class="muted" style="margin-bottom:8px;">Top categories</div>
+      </div>
+      <div class="col-md-4">
+        <div class="k-card p-3">
+          <div class="text-muted mb-1">Alerts ≥ threshold</div>
+          <div class="fs-3 fw-bold" id="kpiAlerts">—</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="k-card p-3">
+          <div class="text-muted mb-1">
+            Average risk <small id="kpiAvgDelta" class="text-muted"></small>
+          </div>
+          <div class="fs-3 fw-bold" id="kpiAvg">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+      <div class="col-lg-8">
+        <div class="k-card p-3">
+          <div class="text-muted mb-2">Average risk by day</div>
+          <!-- keep your manual canvas chart (IDs unchanged) -->
+          <canvas id="chartRisk" height="220"></canvas>
+          <div class="form-text">Canvas chart from <code>/metrics-ui.series_by_day</code>.</div>
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div class="k-card p-3">
+          <div class="text-muted mb-2">Top categories</div>
           <div id="cats">—</div>
         </div>
       </div>
+    </div>
 
-      <div style="height:14px"></div>
-
-      <div class="card">
-        <div class="muted" style="margin-bottom:8px;">Quick actions</div>
-        <div class="actions">
-          <a class="btn" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
-          <a class="btn" id="analyzeSample">🧪 Analyze sample</a>
-          <a class="btn" id="exportCsv">⬇️ Export CSV</a>
-          <button class="btn primary" id="btnLoadDemo" type="button">✨ Load demo data</button>
-        </div>
-        <div class="note" style="margin-top:8px">These run using your signed-in session (no API key needed).</div>
+    <div class="k-card p-3 mt-3">
+      <div class="text-muted mb-2">Quick actions</div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-light btn-sm" id="fetchXRPL">⚡ Fetch XRPL (demo)</a>
+        <a class="btn btn-outline-light btn-sm" id="analyzeSample">🧪 Analyze sample</a>
+        <a class="btn btn-outline-light btn-sm" id="exportCsv" target="_blank" rel="noopener">⬇️ Export CSV</a>
+        <button class="btn btn-primary btn-sm" id="btnLoadDemo" type="button">✨ Load demo data</button>
       </div>
+      <div class="form-text mt-2">These run using your signed-in session (no API key needed).</div>
+    </div>
 
-      <div style="height:14px"></div>
-
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <div class="muted">Recent (live)</div>
-          <label class="muted" style="display:inline-flex;align-items:center;gap:6px">
-            <input id="onlyThresh" type="checkbox"> Only ≥ threshold
-          </label>
+    <div class="k-card p-3 mt-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="text-muted">Recent (live)</div>
+        <div class="form-check form-switch">
+          <input id="onlyThresh" class="form-check-input" type="checkbox">
+          <label for="onlyThresh" class="form-check-label">Only ≥ threshold</label>
         </div>
-        <table>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
           <thead><tr><th>Time</th><th>From → To</th><th>Amount</th><th>Category</th><th>Risk</th></tr></thead>
-          <tbody id="tblRecent"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+          <tbody id="tblRecent"><tr><td colspan="5" class="text-muted">loading…</td></tr></tbody>
         </table>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- EXPLORE -->
-    <section id="panel-explore" role="tabpanel" aria-labelledby="tab-explore" hidden>
-      <div class="card" style="margin-bottom:14px">
-        <h2 style="margin:0">Explore</h2>
-        <p class="muted" style="margin:8px 0 0">Coming soon.</p>
+  <!-- EXPLORE -->
+  <section id="panel-explore" role="tabpanel" aria-labelledby="tab-explore" hidden>
+    <div class="k-card p-3 mb-3">
+      <h2 class="h5 m-0">Explore</h2>
+      <p class="text-muted mb-0 mt-2">Coming soon.</p>
+    </div>
+  </section>
+
+  <!-- CREATE (Saved wallets) -->
+  <section id="panel-create" role="tabpanel" aria-labelledby="tab-create" hidden>
+    <div class="k-card p-3">
+      <h2 class="h5 m-0 mb-2">Saved wallets</h2>
+      <div class="d-flex flex-wrap gap-2 mb-2">
+        <input id="walletInput" class="form-control" style="max-width:420px" placeholder="rEb8TK3gBgk5..." />
+        <button class="btn btn-outline-light" id="btnAddWallet" type="button">＋ Save</button>
       </div>
-    </section>
+      <div id="walletList" class="text-muted">No wallets yet.</div>
+    </div>
+  </section>
 
-    <!-- CREATE (Saved wallets) -->
-    <section id="panel-create" role="tabpanel" aria-labelledby="tab-create" hidden>
-      <div class="card">
-        <h2 style="margin:0 0 8px 0">Saved wallets</h2>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-          <input id="walletInput" placeholder="rEb8TK3gBgk5..." style="flex:1;min-width:240px;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0f1630;color:#e8ecf3">
-          <button class="btn" id="btnAddWallet" type="button">＋ Save</button>
-        </div>
-        <div id="walletList" class="muted">No wallets yet.</div>
+  <!-- ALERTS (panel placeholder; full page still at /alerts-ui) -->
+  <section id="panel-alerts" role="tabpanel" aria-labelledby="tab-alerts" hidden>
+    <div class="k-card p-3">
+      <h2 class="h5 m-0">Alerts</h2>
+      <p class="text-muted mb-0">Live alerts & filters live here.</p>
+    </div>
+  </section>
+
+  <!-- PROFILE -->
+  <section id="panel-profile" role="tabpanel" aria-labelledby="tab-profile" hidden>
+    <div class="k-card p-3">
+      <h2 class="h5 m-0">Profile</h2>
+      <p class="text-muted mb-0">Signed in as <em id="meEmail">—</em>. Role: <code id="meRole">—</code>.</p>
+      <div class="form-text">Transactions folders live here soon (years & exports).</div>
+    </div>
+  </section>
+
+  <!-- ADMIN -->
+  <section id="panel-admin" role="tabpanel" aria-labelledby="tab-admin" hidden>
+    <div class="k-card p-3">
+      <h2 class="h5 m-0">Admin</h2>
+      <p class="text-muted mb-2">Admin tools. Restricted to administrators.</p>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-light" href="/docs" target="_blank" rel="noopener">📜 API Docs</a>
+        <a class="btn btn-outline-light" href="/admin/test-email?key={{ key or '' }}" target="_blank" rel="noopener">✉️ Send test email</a>
       </div>
-    </section>
+    </div>
+  </section>
+</main>
 
-    <!-- ALERTS -->
-    <section id="panel-alerts" role="tabpanel" aria-labelledby="tab-alerts" hidden>
-      <div class="card"><h2 style="margin-top:0">Alerts</h2><p class="muted">Live alerts & filters live here.</p></div>
-    </section>
+<!-- Toasts container (IDs preserved) -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts" aria-live="polite" aria-atomic="true"></div>
 
-    <!-- PROFILE -->
-    <section id="panel-profile" role="tabpanel" aria-labelledby="tab-profile" hidden>
-      <div class="card">
-        <h2 style="margin-top:0">Profile</h2>
-        <p class="muted">Signed in as <em id="meEmail">—</em>. Role: <code id="meRole">—</code>.</p>
-        <div class="note">Transactions folders live here soon (years & exports).</div>
-      </div>
-    </section>
+{% endblock %}
 
-    <!-- ADMIN -->
-    <section id="panel-admin" role="tabpanel" aria-labelledby="tab-admin" hidden>
-      <div class="card">
-        <h2 style="margin-top:0">Admin</h2>
-        <p class="muted">Admin tools. Restricted to administrators.</p>
-        <div class="actions" style="margin-top:8px">
-          <a class="btn" href="/docs" target="_blank" rel="noopener">📜 API Docs</a>
-          <a class="btn" href="/admin/test-email?key={{ key or '' }}" target="_blank" rel="noopener">✉️ Send test email</a>
-        </div>
-      </div>
-    </section>
-  </main>
+{% block scripts %}
+<script>
+(function(){
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+  const toasts = $('#toasts');
+  const body = document.body;
+  const tabs = $$('#tabs [role="tab"]');
+  const panels = $$('[role="tabpanel"]');
 
-  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
+  function toast(msg, type='ok', ms=2400){
+    const el = document.createElement('div');
+    const kind = type==='ok'?'success': type==='err'?'danger': type==='warn'?'warning':'secondary';
+    el.className = 'toast text-bg-'+kind+' border-0';
+    el.innerHTML = `<div class="d-flex"><div class="toast-body">${msg}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>`;
+    toasts.appendChild(el);
+    const t = new bootstrap.Toast(el, { delay: ms });
+    t.show();
+    el.addEventListener('hidden.bs.toast', ()=> el.remove());
+  }
 
-  <script>
-  (function(){
-    const $  = (s, r=document) => r.querySelector(s);
-    const $$ = (s, r=document) => [...r.querySelectorAll(s)];
-    const toasts = $('#toasts');
-    const body = document.body;
-    const tabs = $$('#tabs [role="tab"]');
-    const panels = $$('[role="tabpanel"]');
+  // ---- CSRF helper (send header on session POSTs)
+  function readCookie(name){
+    return document.cookie.split('; ').find(r => r.startsWith(name+'='))?.split('=')[1];
+  }
+  function withCsrf(init={}){
+    const t = readCookie('csrf_token');
+    const headers = Object.assign({}, init.headers||{}, t ? {'X-CSRF-Token': t} : {});
+    return Object.assign({}, init, { headers, credentials:'include' });
+  }
 
-    function toast(msg, type='ok', ms=2400){
-      const el = document.createElement('div');
-      el.className = 'toast ' + type;
-      el.textContent = msg;
-      toasts.appendChild(el);
-      setTimeout(()=> el.remove(), ms);
+  async function loadMe(){
+    try{
+      const r = await fetch('/me', {credentials:'include'});
+      if(!r.ok) throw 0;
+      const me = await r.json();
+      body.dataset.role = (me.role || 'viewer');
+      $('#meEmail') && ($('#meEmail').textContent = me.email || '—');
+      $('#meRole')  && ($('#meRole').textContent  = me.role  || '—');
+    }catch{ body.dataset.role=''; }
+  }
+
+  function fmt(n){ return Intl.NumberFormat().format(n); }
+  function paintKPIs(m){
+    $('#kpiTotal').textContent = fmt(m.total || 0);
+    $('#kpiAlerts').textContent = fmt(m.alerts || 0);
+    $('#kpiAvg').textContent = (m.avg_risk ?? 0).toFixed(3);
+
+    const s = m.series_by_day || [];
+    const elDelta = $('#kpiAvgDelta');
+    if (s.length >= 2 && elDelta) {
+      const last = +s[s.length-1].avg_risk || 0;
+      const prev = +s[s.length-2].avg_risk || 0;
+      const delta = (last - prev) / (prev || 1) * 100;
+      elDelta.textContent = ' • ' + (delta>=0? '▲':'▼') + Math.abs(delta).toFixed(1) + '%';
+    } else if (elDelta) elDelta.textContent = '';
+
+    const catsDiv = $('#cats');
+    if (catsDiv){
+      const cats = Object.entries(m.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
+      catsDiv.innerHTML = cats.length ? cats.map(([k,v])=>`<span class="badge k-badge me-1">${k} · ${v}</span>`).join(' ')
+                                      : '<span class="text-muted">none</span>';
     }
+  }
 
-    // ---- CSRF helper (send header on session POSTs)
-    function readCookie(name){
-      return document.cookie.split('; ').find(r => r.startsWith(name+'='))?.split('=')[1];
-    }
-    function withCsrf(init={}){
-      const t = readCookie('csrf_token');
-      const headers = Object.assign({}, init.headers||{}, t ? {'X-CSRF-Token': t} : {});
-      return Object.assign({}, init, { headers, credentials:'include' });
-    }
+  // keep your manual canvas chart
+  function paintChart(series){
+    const cv = $('#chartRisk'); if(!cv) return;
+    const dpr = Math.min(window.devicePixelRatio||1,2);
+    const parent = cv.parentElement;
+    const w = parent.clientWidth, h = 220;
+    cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
+    cv.style.width = w+'px'; cv.style.height = h+'px';
+    const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+    if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
+    const xs = series.map(d => new Date(d.date).getTime());
+    const ys = series.map(d => +d.avg_risk || 0);
+    const minX=Math.min(...xs), maxX=Math.max(...xs);
+    const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
+    const pad=16, top=10, bottom=28;
+    const iw = w - pad*2, ih = h - top - bottom;
+    const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
+    const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
+    const grad = ctx.createLinearGradient(0, top, 0, top+ih);
+    grad.addColorStop(0,'rgba(123,108,255,.45)'); grad.addColorStop(1,'rgba(123,108,255,0)');
+    ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
+    for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
+    ctx.lineTo(X(xs[xs.length-1]), top+ih); ctx.lineTo(X(xs[0]), top+ih); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
+    for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
+    ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
+  }
 
-    async function loadMe(){
-      try{
-        const r = await fetch('/me', {credentials:'include'});
-        if(!r.ok) throw 0;
-        const me = await r.json();
-        body.dataset.role = (me.role || 'viewer');
-        $('#meEmail') && ($('#meEmail').textContent = me.email || '—');
-        $('#meRole')  && ($('#meRole').textContent  = me.role  || '—');
-      }catch{ body.dataset.role=''; }
+  // --- Recent table: always fetch all, then filter client-side
+  const dedupe = new Set();
+  function keyFor(it){ return it.tx_id || `${it.timestamp}|${it.from_addr}|${it.to_addr}|${it.amount}`; }
+  function passesFilter(it){
+    const thr = 0.75;
+    const risk = Number(it.risk_score ?? it.score ?? 0);
+    return !$('#onlyThresh').checked || risk >= thr;
+  }
+  function formatRow(it){
+    const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
+    const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
+    const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
+    const cat= it.category || 'unknown';
+    const risk = Number(it.risk_score ?? it.score ?? 0);
+    const cls  = risk >= 0.75 ? 'text-warning' : 'text-success';
+    return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="badge k-badge">${cat}</span></td><td class="${cls}">${risk.toFixed(3)}</td></tr>`;
+  }
+  function renderRows(items){
+    const tbody = $('#tblRecent');
+    const rows = [];
+    dedupe.clear();
+    for(const it of items){
+      const k = keyFor(it);
+      if(dedupe.has(k)) continue;
+      dedupe.add(k);
+      if(passesFilter(it)) rows.push(formatRow(it));
     }
+    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" class="text-muted">No data yet. Try “Analyze sample”.</td></tr>`;
+  }
+  async function loadRecent(){
+    const r = await fetch('/uiapi/recent?limit=50&only_alerts=false', {credentials:'include'});
+    if(!r.ok) return;
+    const data = await r.json();
+    const items = (data.items || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+    renderRows(items);
+  }
+  $('#onlyThresh').addEventListener('change', loadRecent);
 
-    function fmt(n){ return Intl.NumberFormat().format(n); }
-    function paintKPIs(m){
-      $('#kpiTotal').textContent = fmt(m.total || 0);
-      $('#kpiAlerts').textContent = fmt(m.alerts || 0);
-      $('#kpiAvg').textContent = (m.avg_risk ?? 0).toFixed(3);
-
-      const s = m.series_by_day || [];
-      const elDelta = $('#kpiAvgDelta');
-      if (s.length >= 2 && elDelta) {
-        const last = +s[s.length-1].avg_risk || 0;
-        const prev = +s[s.length-2].avg_risk || 0;
-        const delta = (last - prev) / (prev || 1) * 100;
-        elDelta.textContent = ' • ' + (delta>=0? '▲':'▼') + Math.abs(delta).toFixed(1) + '%';
-      } else if (elDelta) elDelta.textContent = '';
-
-      const catsDiv = $('#cats');
-      if (catsDiv){
-        const cats = Object.entries(m.categories || {}).sort((a,b)=>b[1]-a[1]).slice(0,6);
-        catsDiv.innerHTML = cats.length ? cats.map(([k,v])=>`<span class="tag">${k} · ${v}</span>`).join(' ') : '<span class="muted">none</span>';
-      }
-    }
-
-    function paintChart(series){
-      const cv = $('#chartRisk'); if(!cv) return;
-      const dpr = Math.min(window.devicePixelRatio||1,2);
-      const parent = cv.parentElement;
-      const w = parent.clientWidth, h = 220;
-      cv.width = Math.floor(w*dpr); cv.height = Math.floor(h*dpr);
-      cv.style.width = w+'px'; cv.style.height = h+'px';
-      const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-      ctx.clearRect(0,0,w,h);
-      if(!series.length){ ctx.fillStyle='rgba(255,255,255,.45)'; ctx.fillText('No data yet', 16, 24); return; }
-      const xs = series.map(d => new Date(d.date).getTime());
-      const ys = series.map(d => +d.avg_risk || 0);
-      const minX=Math.min(...xs), maxX=Math.max(...xs);
-      const minY=Math.min(0, ...ys), maxY=Math.max(1, ...ys);
-      const pad=16, top=10, bottom=28;
-      const iw = w - pad*2, ih = h - top - bottom;
-      const X = t => pad + ((t-minX)/(maxX-minX || 1))*iw;
-      const Y = v => top + ih - ((v-minY)/(maxY-minY || 1))*ih;
-      const grad = ctx.createLinearGradient(0, top, 0, top+ih);
-      grad.addColorStop(0,'rgba(123,108,255,.45)'); grad.addColorStop(1,'rgba(123,108,255,0)');
-      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
-      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
-      ctx.lineTo(X(xs[xs.length-1]), top+ih); ctx.lineTo(X(xs[0]), top+ih); ctx.closePath();
-      ctx.fillStyle = grad; ctx.fill();
-      ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(ys[0]));
-      for(let i=1;i<xs.length;i++) ctx.lineTo(X(xs[i]), Y(ys[i]));
-      ctx.strokeStyle='rgba(160,200,255,.9)'; ctx.lineWidth=2; ctx.stroke();
-    }
-
-    // --- Recent table: always fetch all, then filter client-side
-    const dedupe = new Set();
-    function keyFor(it){ return it.tx_id || `${it.timestamp}|${it.from_addr}|${it.to_addr}|${it.amount}`; }
-    function passesFilter(it){
-      const thr = 0.75;
-      const risk = Number(it.risk_score ?? it.score ?? 0);
-      return !$('#onlyThresh').checked || risk >= thr;
-    }
-    function formatRow(it){
-      const t  = (it.timestamp||'').toString().replace('T',' ').slice(0,19);
-      const ft = `${(it.from_addr||'').slice(0,6)}… → ${(it.to_addr||'').slice(0,6)}…`;
-      const amt= `${(+it.amount||0).toFixed(2)} ${(it.symbol||'')}`;
-      const cat= it.category || 'unknown';
-      const risk = Number(it.risk_score ?? it.score ?? 0);
-      const cls  = risk >= 0.75 ? 'warn' : 'ok';
-      return `<tr><td>${t}</td><td>${ft}</td><td>${amt}</td><td><span class="tag">${cat}</span></td><td class="${cls}">${risk.toFixed(3)}</td></tr>`;
-    }
-    function renderRows(items){
-      const tbody = $('#tblRecent');
-      const rows = [];
-      dedupe.clear();
-      for(const it of items){
-        const k = keyFor(it);
-        if(dedupe.has(k)) continue;
-        dedupe.add(k);
-        if(passesFilter(it)) rows.push(formatRow(it));
-      }
-      tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" class="muted">No data yet. Try “Analyze sample”.</td></tr>`;
-    }
-    async function loadRecent(){
-      const r = await fetch('/uiapi/recent?limit=50&only_alerts=false', {credentials:'include'});
-      if(!r.ok) return;
-      const data = await r.json();
-      const items = (data.items || []).slice(0,50).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
-      renderRows(items);
-    }
-    $('#onlyThresh').addEventListener('change', loadRecent);
-
-    // --- WebSocket live insert
-    function connectWS(){
-      try{
-        const wsUrl = (location.protocol==='https:'?'wss':'ws') + '://' + location.host + '/ws/alerts';
-        const ws = new WebSocket(wsUrl);
-        ws.onopen = ()=> ws.send(JSON.stringify({ping: Date.now()}));
-        ws.onmessage = (ev)=>{
-          try{
-            const msg = JSON.parse(ev.data||'{}');
-            if(msg.type==='tx' && msg.item){
-              const it = msg.item;
-              const k = keyFor(it);
-              if(!dedupe.has(k) && passesFilter(it)){
-                dedupe.add(k);
-                const tbody = $('#tblRecent');
-                const row = document.createElement('tr');
-                row.innerHTML = formatRow(it).replace(/^<tr>|<\/tr>$/g,'');
-                if (tbody.firstElementChild && tbody.firstElementChild.children.length===5) {
-                  tbody.insertBefore(row, tbody.firstElementChild);
-                } else {
-                  tbody.innerHTML = ''; tbody.appendChild(row);
-                }
-                while(tbody.children.length > 50) tbody.lastElementChild.remove();
+  // --- WebSocket live insert
+  function connectWS(){
+    try{
+      const wsUrl = (location.protocol==='https:'?'wss':'ws') + '://' + location.host + '/ws/alerts';
+      const ws = new WebSocket(wsUrl);
+      ws.onopen = ()=> ws.send(JSON.stringify({ping: Date.now()}));
+      ws.onmessage = (ev)=>{
+        try{
+          const msg = JSON.parse(ev.data||'{}');
+          if(msg.type==='tx' && msg.item){
+            const it = msg.item;
+            const k = keyFor(it);
+            if(!dedupe.has(k) && passesFilter(it)){
+              dedupe.add(k);
+              const tbody = $('#tblRecent');
+              const row = document.createElement('tr');
+              row.innerHTML = formatRow(it).replace(/^<tr>|<\/tr>$/g,'');
+              if (tbody.firstElementChild && tbody.firstElementChild.children.length===5) {
+                tbody.insertBefore(row, tbody.firstElementChild);
+              } else {
+                tbody.innerHTML = ''; tbody.appendChild(row);
               }
+              while(tbody.children.length > 50) tbody.lastElementChild.remove();
             }
-          }catch{}
-        };
-        ws.onclose = ()=> setTimeout(connectWS, 1500);
-        ws.onerror = ()=> ws.close();
-      }catch{}
-    }
-
-    // --- Quick actions
-    $('#fetchXRPL')?.addEventListener('click', async ()=>{
-      const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
-      if (!acct) return;
-      const url = `/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
-      try{
-        const r = await fetch(url, withCsrf({ method:'POST' }));
-        if(!r.ok){
-          const text = await r.text().catch(()=> '');
-          toast(`Fetch failed (${r.status}) ${text.slice(0,120)}`, 'err', 5000);
-        } else {
-          toast('Fetched & saved ✓');
-          await loadMetricsOnce(); await loadRecent();
-        }
-      }catch(e){ toast(`Fetch error: ${e?.message||e}`, 'err', 5000); }
-    });
-    $('#analyzeSample')?.addEventListener('click', async ()=>{
-      const r = await fetch('/uiapi/analyze/sample', withCsrf({ method:'POST' }));
-      toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok ? 'ok' : 'err');
-      await loadMetricsOnce(); await loadRecent();
-    });
-    // FIX: point export to session route that exists
-    $('#exportCsv')?.addEventListener('click', ()=>{ window.open('/uiapi/export/csv/download', '_blank'); });
-    $('#btnLoadDemo')?.addEventListener('click', async ()=>{
-      try{
-        const r = await fetch('/uiapi/analyze/sample', withCsrf({ method:'POST' }));
-        if(!r.ok){
-          const t = await r.text().catch(()=> '');
-          toast(`Could not load demo data (${r.status}) ${t.slice(0,120)}`, 'err', 5000);
-        } else {
-          toast('Demo data loaded ✓');
-          await loadMetricsOnce(); await loadRecent();
-        }
-      }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
-    });
-
-    // Saved wallets (Create tab)
-    async function loadWalletPrefs(){
-      try{
-        const r = await fetch('/me/settings', {credentials:'include'});
-        if(!r.ok) return {saved_wallets:[]};
-        const s = await r.json();
-        return s.ui_prefs || {saved_wallets:[]};
-      }catch{ return {saved_wallets:[]}; }
-    }
-    async function saveWalletPrefs(prefs){
-      await fetch('/me/settings', {
-        method:'POST', credentials:'include',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ui_prefs: prefs })
-      });
-    }
-    async function refreshWalletList(){
-      const prefs = await loadWalletPrefs();
-      const list = prefs.saved_wallets || [];
-      const el = $('#walletList');
-      if(!list.length){ el.innerHTML = 'No wallets yet.'; return; }
-      el.innerHTML = list.map(a => `
-        <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
-          <code style="flex:1">${a}</code>
-          <button class="btn" data-act="fetch" data-acct="${a}">Fetch live</button>
-          <button class="btn" data-act="remove" data-acct="${a}">Remove</button>
-        </div>
-      `).join('');
-      el.querySelectorAll('button').forEach(b=>{
-        b.onclick = async (e)=>{
-          const acct = e.currentTarget.dataset.acct;
-          if(e.currentTarget.dataset.act === 'fetch'){
-            const r = await fetch(`/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`, withCsrf({method:'POST'}));
-            toast(r.ok ? `Fetched ${acct} ✓` : `Fetch failed for ${acct}`, r.ok ? 'ok':'err');
-            await loadMetricsOnce(); await loadRecent();
-          }else{
-            const prefs2 = await loadWalletPrefs();
-            prefs2.saved_wallets = (prefs2.saved_wallets||[]).filter(x=>x!==acct);
-            await saveWalletPrefs(prefs2);
-            refreshWalletList();
           }
-        };
-      });
-      $('#btnAddWallet').onclick = async ()=>{
-        const a = ($('#walletInput').value||'').trim();
-        if(!a) return;
-        const prefs2 = await loadWalletPrefs();
-        const set = new Set(prefs2.saved_wallets||[]);
-        set.add(a);
-        prefs2.saved_wallets = [...set];
-        await saveWalletPrefs(prefs2);
-        $('#walletInput').value='';
-        refreshWalletList();
+        }catch{}
       };
-    }
+      ws.onclose = ()=> setTimeout(connectWS, 1500);
+      ws.onerror = ()=> ws.close();
+    }catch{}
+  }
 
-    async function loadMetricsOnce(){
-      try{
-        const r = await fetch(`/metrics-ui?days=7`, { credentials:'include' });
-        if(!r.ok) throw 0;
-        const data = await r.json();
-        paintKPIs(data);
-        paintChart(data.series_by_day || []);
-      }catch{}
-    }
-
-    function setSelected(tab){
-      const target = tab.getAttribute('aria-controls');
-      tabs.forEach(t=>{ const sel = (t===tab); t.setAttribute('aria-selected', sel); t.tabIndex = sel ? 0 : -1; });
-      panels.forEach(p => p.hidden = (p.id !== target));
-      tab.focus({preventScroll:true});
-      const hash = '#' + (tab.id.replace(/^tab-/, ''));
-      if (location.hash !== hash) history.replaceState(null, '', hash);
-      document.title = 'Klerno • ' + tab.textContent;
-      body.dataset.active = hash.slice(1);
-      if (hash === '#admin' && body.dataset.role !== 'admin') {
-        toast('Admins only', 'warn');
-        history.replaceState(null, '', '#home');
-        selectTabById('tab-home');
+  // --- Quick actions
+  $('#fetchXRPL')?.addEventListener('click', async ()=>{
+    const acct = prompt('XRPL account to fetch (e.g. rEb8TK3gBgk5...)','rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh');
+    if (!acct) return;
+    const url = `/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`;
+    try{
+      const r = await fetch(url, withCsrf({ method:'POST' }));
+      if(!r.ok){
+        const text = await r.text().catch(()=> '');
+        toast(`Fetch failed (${r.status}) ${text.slice(0,120)}`, 'err', 5000);
+      } else {
+        toast('Fetched & saved ✓');
+        await loadMetricsOnce(); await loadRecent();
       }
-    }
-    function selectTabById(id){ const tab = $('#'+id); if (tab) setSelected(tab); }
-    $('#tabs').addEventListener('click', (e)=>{ const btn = e.target.closest('[role="tab"]'); if(btn) setSelected(btn); });
-    function routeFromHash(){
-      const valid = new Set(['home','explore','create','alerts','profile','admin']);
-      const raw = (location.hash || '#home').replace('#','').toLowerCase().trim();
-      const name = valid.has(raw) ? raw : 'home';
-      if (name==='admin' && body.dataset.role !== 'admin'){ toast('Admins only', 'warn'); history.replaceState(null, '', '#home'); selectTabById('tab-home'); return; }
-      selectTabById('tab-' + name);
-    }
-    window.addEventListener('hashchange', routeFromHash);
-
-    (async function boot(){
-      await loadMe();
-      await loadMetricsOnce();
-      await loadRecent();
-      await refreshWalletList();
-      connectWS();
-      setInterval(()=>{ if(!document.hidden){ loadMetricsOnce(); loadRecent(); } }, 5000);
-      routeFromHash();
-    })();
-
-    // background animation (with small fix)
-    (function(){
-      const bg = document.getElementById('bg'); if(!bg) return;
-      const ctx = bg.getContext('2d');
-      let W,H,DPR=Math.min(window.devicePixelRatio||1,2), P=[];
-      function rnd(n){ return Math.random(); }
-      function resize(){
-        W=bg.width = Math.floor(innerWidth*DPR);
-        H=bg.height= Math.floor(innerHeight*DPR);
-        bg.style.width = innerWidth+'px'; bg.style.height= innerHeight+'px';
-        const n=Math.floor((W*H)/(90_000*DPR));
-        P = Array.from({length:n},()=>({ x:rnd()*W, y:rnd()*H, vx:(rnd()-.5)*.35*DPR, vy:(rnd()-.5)*.35*DPR }));
+    }catch(e){ toast(`Fetch error: ${e?.message||e}`, 'err', 5000); }
+  });
+  $('#analyzeSample')?.addEventListener('click', async ()=>{
+    const r = await fetch('/uiapi/analyze/sample', withCsrf({ method:'POST' }));
+    toast(r.ok ? 'Sample analyzed ✓' : 'Analyze failed', r.ok ? 'ok' : 'err');
+    await loadMetricsOnce(); await loadRecent();
+  });
+  // Export: point to session route that exists
+  $('#exportCsv')?.setAttribute('href', '/uiapi/export/csv/download');
+  $('#btnLoadDemo')?.addEventListener('click', async ()=>{
+    try{
+      const r = await fetch('/uiapi/analyze/sample', withCsrf({ method:'POST' }));
+      if(!r.ok){
+        const t = await r.text().catch(()=> '');
+        toast(`Could not load demo data (${r.status}) ${t.slice(0,120)}`, 'err', 5000);
+      } else {
+        toast('Demo data loaded ✓');
+        await loadMetricsOnce(); await loadRecent();
       }
-      function step(){
-        ctx.clearRect(0,0,W,H);
-        const g=ctx.createLinearGradient(0,0,W,H);
-        g.addColorStop(0,'rgba(123,108,255,.10)'); g.addColorStop(.5,'rgba(0,225,255,.08)'); g.addColorStop(1,'rgba(255,255,255,.05)');
-        ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-        ctx.fillStyle='rgba(255,255,255,.45)';
-        for(const p of P){
-          p.x+=p.vx; p.y+=p.vy;
-          if(p.x<0||p.x>W) p.vx*=-1;
-          if(p.y<0||p.y>H) p.vy*=-1; /* fixed */
-          ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill();
+    }catch(e){ toast(`Demo load error: ${e?.message||e}`, 'err', 5000); }
+  });
+
+  // Saved wallets (Create tab)
+  async function loadWalletPrefs(){
+    try{
+      const r = await fetch('/me/settings', {credentials:'include'});
+      if(!r.ok) return {saved_wallets:[]};
+      const s = await r.json();
+      return s.ui_prefs || {saved_wallets:[]};
+    }catch{ return {saved_wallets:[]}; }
+  }
+  async function saveWalletPrefs(prefs){
+    await fetch('/me/settings', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ui_prefs: prefs })
+    });
+  }
+  async function refreshWalletList(){
+    const prefs = await loadWalletPrefs();
+    const list = prefs.saved_wallets || [];
+    const el = $('#walletList');
+    if(!list.length){ el.innerHTML = 'No wallets yet.'; return; }
+    el.innerHTML = list.map(a => `
+      <div class="d-flex align-items-center gap-2 my-1">
+        <code class="flex-grow-1">${a}</code>
+        <button class="btn btn-outline-light btn-sm" data-act="fetch" data-acct="${a}">Fetch live</button>
+        <button class="btn btn-outline-light btn-sm" data-act="remove" data-acct="${a}">Remove</button>
+      </div>
+    `).join('');
+    el.querySelectorAll('button').forEach(b=>{
+      b.onclick = async (e)=>{
+        const acct = e.currentTarget.dataset.acct;
+        if(e.currentTarget.dataset.act === 'fetch'){
+          const r = await fetch(`/uiapi/integrations/xrpl/fetch_and_save?account=${encodeURIComponent(acct)}&limit=10`, withCsrf({method:'POST'}));
+          toast(r.ok ? `Fetched ${acct} ✓` : `Fetch failed for ${acct}`, r.ok ? 'ok':'err');
+          await loadMetricsOnce(); await loadRecent();
+        }else{
+          const prefs2 = await loadWalletPrefs();
+          prefs2.saved_wallets = (prefs2.saved_wallets||[]).filter(x=>x!==acct);
+          await saveWalletPrefs(prefs2);
+          refreshWalletList();
         }
-        ctx.strokeStyle='rgba(200,220,255,.11)';
-        for(let i=0;i<P.length;i++){
-          const a=P[i];
-          for(let j=i+1;j<P.length;j++){
-            const b=P[j],dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;
-            if(d2<18000*DPR){
-              ctx.globalAlpha=1-d2/(18000*DPR);
-              ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
-            }
+      };
+    });
+    $('#btnAddWallet').onclick = async ()=>{
+      const a = ($('#walletInput').value||'').trim();
+      if(!a) return;
+      const prefs2 = await loadWalletPrefs();
+      const set = new Set(prefs2.saved_wallets||[]);
+      set.add(a);
+      prefs2.saved_wallets = [...set];
+      await saveWalletPrefs(prefs2);
+      $('#walletInput').value='';
+      refreshWalletList();
+    };
+  }
+
+  async function loadMetricsOnce(){
+    try{
+      const r = await fetch(`/metrics-ui?days=7`, { credentials:'include' });
+      if(!r.ok) throw 0;
+      const data = await r.json();
+      paintKPIs(data);
+      paintChart(data.series_by_day || []);
+    }catch{}
+  }
+
+  function setSelected(tab){
+    const target = tab.getAttribute('aria-controls');
+    tabs.forEach(t=>{ const sel = (t===tab); t.setAttribute('aria-selected', sel); t.tabIndex = sel ? 0 : -1; });
+    panels.forEach(p => p.hidden = (p.id !== target));
+    tab.focus({preventScroll:true});
+    const hash = '#' + (tab.id.replace(/^tab-/, ''));
+    if (location.hash !== hash) history.replaceState(null, '', hash);
+    document.title = 'Klerno • ' + tab.textContent;
+    body.dataset.active = hash.slice(1);
+    if (hash === '#admin' && body.dataset.role !== 'admin') {
+      toast('Admins only', 'warn');
+      history.replaceState(null, '', '#home');
+      selectTabById('tab-home');
+    }
+  }
+  function selectTabById(id){ const tab = $('#'+id); if (tab) setSelected(tab); }
+  $('#tabs').addEventListener('click', (e)=>{ const btn = e.target.closest('[role="tab"]'); if(btn) setSelected(btn); });
+  function routeFromHash(){
+    const valid = new Set(['home','explore','create','alerts','profile','admin']);
+    const raw = (location.hash || '#home').replace('#','').toLowerCase().trim();
+    const name = valid.has(raw) ? raw : 'home';
+    if (name==='admin' && body.dataset.role !== 'admin'){ toast('Admins only', 'warn'); history.replaceState(null, '', '#home'); selectTabById('tab-home'); return; }
+    selectTabById('tab-' + name);
+  }
+  window.addEventListener('hashchange', routeFromHash);
+
+  (async function boot(){
+    await loadMe();
+    await loadMetricsOnce();
+    await loadRecent();
+    await refreshWalletList();
+    connectWS();
+    setInterval(()=>{ if(!document.hidden){ loadMetricsOnce(); loadRecent(); } }, 5000);
+    routeFromHash();
+  })();
+
+  // background animation (unchanged except tiny fix)
+  (function(){
+    const bg = document.getElementById('bg'); if(!bg) return;
+    const ctx = bg.getContext('2d');
+    let W,H,DPR=Math.min(window.devicePixelRatio||1,2), P=[];
+    function rnd(){ return Math.random(); }
+    function resize(){
+      W=bg.width = Math.floor(innerWidth*DPR);
+      H=bg.height= Math.floor(innerHeight*DPR);
+      bg.style.width = innerWidth+'px'; bg.style.height= innerHeight+'px';
+      const n=Math.floor((W*H)/(90_000*DPR));
+      P = Array.from({length:n},()=>({ x:rnd()*W, y:rnd()*H, vx:(rnd()-.5)*.35*DPR, vy:(rnd()-.5)*.35*DPR }));
+    }
+    function step(){
+      ctx.clearRect(0,0,W,H);
+      const g=ctx.createLinearGradient(0,0,W,H);
+      g.addColorStop(0,'rgba(123,108,255,.10)'); g.addColorStop(.5,'rgba(0,225,255,.08)'); g.addColorStop(1,'rgba(255,255,255,.05)');
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='rgba(255,255,255,.45)';
+      for(const p of P){
+        p.x+=p.vx; p.y+=p.vy;
+        if(p.x<0||p.x>W) p.vx*=-1;
+        if(p.y<0||p.y>H) p.vy*=-1; /* fixed */
+        ctx.beginPath(); ctx.arc(p.x,p.y,1.3*DPR,0,Math.PI*2); ctx.fill();
+      }
+      ctx.strokeStyle='rgba(200,220,255,.11)';
+      for(let i=0;i<P.length;i++){
+        const a=P[i];
+        for(let j=i+1;j<P.length;j++){
+          const b=P[j],dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;
+          if(d2<18000*DPR){
+            ctx.globalAlpha=1-d2/(18000*DPR);
+            ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
           }
         }
-        ctx.globalAlpha=1; requestAnimationFrame(step);
       }
-      resize(); requestAnimationFrame(step); addEventListener('resize', resize);
-    })();
+      ctx.globalAlpha=1; requestAnimationFrame(step);
+    }
+    resize(); requestAnimationFrame(step); addEventListener('resize', resize);
   })();
-  </script>
-</body>
-</html>
+})();
+</script>
+{% endblock %}
