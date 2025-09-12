@@ -1,23 +1,22 @@
 # app/admin.py
 from __future__ import annotations
 
-import os, json
-from io import StringIO
+import os
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from . import store
 from .deps import require_user
 from .guardian import score_risk
 from .compliance import tag_category
-from pydantic import BaseModel, EmailStr
+from .security import rotate_api_key, preview_api_key
 
-
-# Optional email (SendGrid) — same envs your app already uses
+# ---------- Email (SendGrid) ----------
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
 ALERT_FROM   = os.getenv("ALERT_EMAIL_FROM", "").strip()
 DEFAULT_TO   = os.getenv("ALERT_EMAIL_TO", "").strip()
@@ -25,16 +24,17 @@ DEFAULT_TO   = os.getenv("ALERT_EMAIL_TO", "").strip()
 BASE_DIR = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+# SINGLE router for this module
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
-
+# ---------- Auth helpers ----------
 def require_admin(user=Depends(require_user)):
     """Allow only role=admin."""
     if (user.get("role") or "").lower() != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
     return user
 
-
+# ---------- Utils ----------
 def _row_score(r: Dict[str, Any]) -> float:
     try:
         val = r.get("score", None)
@@ -45,7 +45,6 @@ def _row_score(r: Dict[str, Any]) -> float:
         return float(val or 0)
     except Exception:
         return 0.0
-
 
 def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict[str, Any]:
     """Lightweight SendGrid helper used only in admin routes."""
@@ -68,15 +67,12 @@ def _send_email(subject: str, text: str, to_email: Optional[str] = None) -> Dict
     except Exception as e:
         return {"sent": False, "error": str(e)}
 
-
-# ---------------- UI ----------------
-
+# ---------- UI ----------
 @router.get("", include_in_schema=False)
 def admin_home(request: Request, user=Depends(require_admin)):
     return templates.TemplateResponse("admin.html", {"request": request, "title": "Admin"})
 
-# ---------------- JSON: Overview / Stats ----------------
-
+# ---------- Stats ----------
 @router.get("/api/stats")
 def admin_stats(user=Depends(require_admin)):
     rows = store.list_all(limit=100000)
@@ -89,7 +85,7 @@ def admin_stats(user=Depends(require_admin)):
         c = r.get("category") or "unknown"
         cats[c] = cats.get(c, 0) + 1
 
-    backend = "postgres" if store.USING_POSTGRES else "sqlite"
+    backend = "postgres" if getattr(store, "USING_POSTGRES", False) else "sqlite"
     return {
         "backend": backend,
         "db_path": getattr(store, "DB_PATH", None),
@@ -101,42 +97,51 @@ def admin_stats(user=Depends(require_admin)):
         "server_time": pd.Timestamp.utcnow().isoformat(),
     }
 
-# ---------------- JSON: Users ----------------
-
+# ---------- Users ----------
 def _list_users() -> List[Dict[str, Any]]:
-    # Avoid adding new store fn: use a direct query against existing table
-    con = store._conn(); cur = con.cursor()
+    # Uses store._conn() to avoid adding a new store API surface
+    con = store._conn()
+    cur = con.cursor()
     cur.execute("""
         SELECT id, email, password_hash, role, subscription_active, created_at
         FROM users
         ORDER BY created_at DESC
     """)
-    rows = cur.fetchall(); con.close()
+    rows = cur.fetchall()
+    con.close()
+
     out: List[Dict[str, Any]] = []
     for r in rows:
+        # support sqlite3.Row/psycopg rows/dicts
         if isinstance(r, dict):
             d = dict(r)
-        else:
+        elif hasattr(r, "keys"):
             d = {k: r[k] for k in r.keys()}
+        else:
+            # Fallback: assume order matches the SELECT
+            id_, email, password_hash, role, sub_active, created_at = r
+            d = {
+                "id": id_,
+                "email": email,
+                "password_hash": password_hash,
+                "role": role,
+                "subscription_active": sub_active,
+                "created_at": created_at,
+            }
         d["subscription_active"] = bool(d.get("subscription_active"))
         d.pop("password_hash", None)  # never return hashes
         out.append(d)
     return out
 
-
 @router.get("/api/users")
 def admin_users(user=Depends(require_admin)):
     return {"items": _list_users()}
-
 
 class UpdateRolePayload(BaseModel):
     role: str
 
 class UpdateSubPayload(BaseModel):
     active: bool
-
-# Pydantic BaseModel import for request bodies
-from pydantic import BaseModel
 
 @router.post("/api/users/{user_id}/role")
 def admin_set_role(user_id: int, payload: UpdateRolePayload, user=Depends(require_admin)):
@@ -157,11 +162,9 @@ def admin_set_subscription(user_id: int, payload: UpdateSubPayload, user=Depends
     store.set_subscription_active(u["email"], bool(payload.active))
     return {"ok": True, "user": store.get_user_by_id(user_id)}
 
-# ---------------- JSON: Data tools ----------------
-
+# ---------- Data tools ----------
 class SeedDemoPayload(BaseModel):
-    # Optional: number of rows to take from sample
-    limit: Optional[int] = None
+    limit: Optional[int] = None  # rows to import from sample
 
 @router.post("/api/data/seed_demo")
 def admin_seed_demo(payload: SeedDemoPayload = Body(default=None), user=Depends(require_admin)):
@@ -199,7 +202,7 @@ def admin_seed_demo(payload: SeedDemoPayload = Body(default=None), user=Depends(
             "category": row.get("category") or None,
             "notes": row.get("notes") or "",
         }
-        risk, flags = score_risk(tx)  # accepts dict-like
+        risk, flags = score_risk(tx)
         cat = tx.get("category") or tag_category(tx)
         d = {
             **tx,
@@ -219,20 +222,21 @@ class PurgePayload(BaseModel):
 def admin_purge(payload: PurgePayload, user=Depends(require_admin)):
     if (payload.confirm or "").upper() != "DELETE":
         raise HTTPException(status_code=400, detail='Type "DELETE" to confirm')
-    con = store._conn(); cur = con.cursor()
+    con = store._conn()
+    cur = con.cursor()
     cur.execute("DELETE FROM txs")
-    con.commit(); con.close()
+    con.commit()
+    con.close()
     return {"ok": True, "deleted": True}
 
-# ---------------- JSON: Utilities ----------------
-
+# ---------- Utilities ----------
 class TestEmailPayload(BaseModel):
     email: Optional[str] = None
 
 @router.post("/api/email/test")
 def admin_email_test(payload: TestEmailPayload = Body(default=None), user=Depends(require_admin)):
-    to = payload.email if payload and payload.email else DEFAULT_TO
-    res = _send_email("Klerno Admin Test", "✅ Admin test email from Klerno.")
+    to_addr = payload.email if payload and payload.email else DEFAULT_TO
+    res = _send_email("Klerno Admin Test", "✅ Admin test email from Klerno.", to_addr)
     return {"ok": bool(res.get("sent")), "result": res}
 
 class XRPLPingPayload(BaseModel):
@@ -249,24 +253,12 @@ def admin_xrpl_ping(payload: XRPLPingPayload, user=Depends(require_admin)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
-# app/admin.py (append these)
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException
-from .deps import require_user
-from .security import rotate_api_key, preview_api_key
-
-router = APIRouter(prefix="/admin", tags=["admin"])
-
+# ---------- API Key management ----------
 class ApiKeyRotateResponse(BaseModel):
     api_key: str  # returned ONCE so the admin can copy it
 
-def _ensure_admin(user=Depends(require_user)):
-    if (user or {}).get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin only")
-    return user
-
 @router.post("/api-key/rotate", response_model=ApiKeyRotateResponse)
-def admin_rotate_api_key(user=Depends(_ensure_admin)):
+def admin_rotate_api_key(user=Depends(require_admin)):
     """
     Generates a fresh API key and persists it to data/api_key.secret.
     NOTE: If you set X_API_KEY in ENV, that still takes precedence.
@@ -275,7 +267,7 @@ def admin_rotate_api_key(user=Depends(_ensure_admin)):
     return {"api_key": new_key}
 
 @router.get("/api-key/preview")
-def admin_preview_api_key(user=Depends(_ensure_admin)):
+def admin_preview_api_key(user=Depends(require_admin)):
     """
     Returns masked preview & metadata, never the full key.
     """
