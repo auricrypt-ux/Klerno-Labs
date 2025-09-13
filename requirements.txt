@@ -1,37 +1,135 @@
-# --- Core Web Framework ---
-fastapi==0.110.0
-uvicorn[standard]==0.27.1
+# ==============================================================================
+# Klerno Labs - Production Requirements
+# ==============================================================================
+# World-class SaaS dependency management with security and performance focus
+# Last updated: 2025-01-27
 
-# --- Data & Utilities ---
-pydantic==2.6.1
-pydantic-settings==2.2.1
-pandas==2.2.1
-numpy==1.26.4
-jinja2==3.1.3
-requests==2.31.0
-python-dotenv==1.0.1
-pyyaml==6.0.2
+# ==============================================================================
+# Core Web Framework & Server
+# ==============================================================================
+fastapi==0.110.0              # High-performance async web framework
+uvicorn[standard]==0.27.1      # ASGI server with production features
+starlette>=0.36.3              # Core ASGI framework (FastAPI dependency)
 
-# --- Email / Alerts ---
-sendgrid==6.11.0
-email-validator==2.2.0
+# ==============================================================================
+# Data Validation & Settings Management
+# ==============================================================================
+pydantic==2.6.1               # Data validation and serialization
+pydantic-settings==2.2.1      # Environment-based configuration management
+pydantic-core>=2.16.2         # High-performance Pydantic core
 
-# --- XRPL Support ---
-xrpl-py==2.6.0
+# ==============================================================================
+# Data Processing & Scientific Computing
+# ==============================================================================
+pandas==2.2.1                 # Data manipulation and analysis
+numpy==1.26.4                 # Numerical computing foundation
+orjson==3.9.8                 # Ultra-fast JSON serialization
 
-# --- OpenAI (legacy SDK compatible with xrpl-py httpx pin) ---
-openai==0.28.1
-# lock transitive HTTP stack to what your build used (prevents surprise upgrades)
-httpx==0.24.1
-httpcore==0.17.3
+# ==============================================================================
+# Web & HTTP Libraries
+# ==============================================================================
+requests==2.31.0              # HTTP library for API integrations
+httpx==0.24.1                 # Async HTTP client
+httpcore==0.17.3              # HTTP core library
+aiohttp>=3.8.0                # Async HTTP client/server
 
-# --- Auth / Crypto ---
-PyJWT==2.8.0
-passlib[bcrypt]==1.7.4
+# ==============================================================================
+# Template Engine & Static Files
+# ==============================================================================
+jinja2==3.1.3                 # Template engine for UI rendering
+python-multipart==0.0.9       # Form data and file upload handling
 
-# --- Forms (FastAPI uploads/form data) ---
-python-multipart==0.0.9
+# ==============================================================================
+# Configuration & Environment Management
+# ==============================================================================
+python-dotenv==1.0.1          # Environment variable loading
+pyyaml==6.0.2                 # YAML configuration parsing
 
-psycopg2-binary==2.9.9
+# ==============================================================================
+# Email & Communication
+# ==============================================================================
+sendgrid==6.11.0              # Email delivery service
+email-validator==2.2.0        # Email address validation
 
-orjson==3.9.8
+# ==============================================================================
+# Blockchain Integration - XRPL
+# ==============================================================================
+xrpl-py==2.6.0                # Official XRPL library for Python
+
+# ==============================================================================
+# AI & Machine Learning
+# ==============================================================================
+openai==0.28.1                # OpenAI API client (compatible with xrpl-py)
+
+# ==============================================================================
+# Authentication & Security
+# ==============================================================================
+PyJWT==2.8.0                  # JSON Web Token implementation
+passlib[bcrypt]==1.7.4        # Password hashing with bcrypt support
+
+# ==============================================================================
+# Database & Persistence
+# ==============================================================================
+psycopg2-binary==2.9.9        # PostgreSQL adapter
+alembic>=1.13.0               # Database migrations
+sqlalchemy>=2.0.0             # SQL toolkit and ORM
+
+# ==============================================================================
+# Development & Testing Dependencies
+# ==============================================================================
+pytest>=8.0.0                 # Testing framework
+pytest-asyncio>=0.23.0        # Async testing support
+pytest-cov>=4.0.0             # Coverage reporting
+pytest-mock>=3.12.0           # Mocking utilities
+httpx-test>=0.24.0            # HTTP testing utilities
+
+# ==============================================================================
+# Code Quality & Formatting
+# ==============================================================================
+black>=24.0.0                 # Code formatting
+isort>=5.13.0                 # Import sorting
+flake8>=7.0.0                 # Code linting
+mypy>=1.8.0                   # Static type checking
+bandit>=1.7.5                 # Security linting
+
+# ==============================================================================
+# Monitoring & Observability
+# ==============================================================================
+prometheus-client>=0.19.0     # Metrics collection
+structlog>=23.2.0             # Structured logging
+
+# ==============================================================================
+# Task Queue & Background Jobs
+# ==============================================================================
+celery>=5.3.0                 # Distributed task queue
+redis>=5.0.0                  # In-memory data store for caching
+
+# ==============================================================================
+# API Documentation
+# ==============================================================================
+# FastAPI includes automatic OpenAPI/Swagger docs
+
+# ==============================================================================
+# Production Utilities
+# ==============================================================================
+gunicorn>=21.2.0              # WSGI HTTP Server (alternative to uvicorn)
+python-json-logger>=2.0.7     # JSON logging formatter
+
+# ==============================================================================
+# Security & Compliance
+# ==============================================================================
+cryptography>=41.0.0          # Cryptographic recipes and primitives
+python-jose[cryptography]>=3.3.0  # JSON Web Signature implementation
+
+# ==============================================================================
+# Performance & Optimization
+# ==============================================================================
+uvloop>=0.19.0; sys_platform != "win32"  # Fast event loop (Unix only)
+aiofiles>=23.2.0              # Async file operations
+
+# ==============================================================================
+# Development Environment (Optional - Install separately)
+# ==============================================================================
+# pre-commit>=3.6.0           # Git hooks for code quality
+# jupyter>=1.0.0              # Interactive development
+# ipdb>=0.13.13               # Enhanced debugger

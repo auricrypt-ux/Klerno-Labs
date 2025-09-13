@@ -1,27 +1,203 @@
-# Virtual environments
-.venv/
-.venv311/
-venv/
+# ==============================================================================
+# Klerno Labs .gitignore - World-class SaaS Development Standards
+# ==============================================================================
 
-# Python cache
+# Python Virtual Environments
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+.env*/
+.conda/
+.poetry/
+
+# Python Cache & Compiled Files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+*.manifest
+*.spec
+dist/
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.whl
 *.egg-info/
 
-# Databases
-data/*.db
-
-# Environment files
+# Environment & Configuration
 .env
 .env.*
+!.env.example
+.envrc
+config.ini
+config.yaml
+config.json
+secrets.json
+secrets.yaml
+secrets.ini
 
-# OS/editor
-.DS_Store
-Thumbs.db
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite*
+*.db-journal
+migrations/*.pyc
+
+# Logs & Monitoring
+*.log
+logs/
+log/
+*.log.*
+.logs/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+.cache/
+.testmondata/
+test-results/
+test-reports/
+
+# IDE & Editor Files
 .vscode/*
 !.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-project
+*.sublime-workspace
+.idea/
+*.swp
+*.swo
+*~
 
-# local data
-data/*.db
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Security & Keys
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.p8
+*.jks
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+known_hosts
+authorized_keys
+api_keys.txt
+.ssh/
+.gnupg/
+
+# Docker & Containers
+.dockerignore
+docker-compose.override.yml
+.docker/
+docker-data/
+
+# CI/CD & Deployment
+.github/workflows/secrets/
+.gitlab-ci-local/
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Node.js (if used for frontend tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+package-lock.json
+yarn.lock
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Application Specific
+data/backups/
+data/exports/
+data/imports/
+static/uploads/
+media/uploads/
+cache/
+.cache/
+
+# Monitoring & Analytics
+monitoring/
+metrics/
+traces/
+.monitoring/
+
+# Documentation Build
+docs/_build/
+docs/site/
+mkdocs-site/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Local Development
+local/
+.local/
+dev/
+.dev/
+
+# Backup Files
+*.bak
+*.backup
+*.old
+*~
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# System Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
