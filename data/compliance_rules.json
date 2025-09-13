@@ -1,0 +1,361 @@
+{
+  "$schema": "https://klerno.com/schemas/compliance-rules-v1.json",
+  "version": "1.0.0",
+  "last_updated": "2025-01-27T00:00:00Z",
+  "description": "Comprehensive compliance rules for AML risk assessment and transaction categorization",
+  
+  "rule_categories": {
+    "amount_thresholds": {
+      "description": "Amount-based compliance thresholds",
+      "rules": [
+        {
+          "id": "CTR_THRESHOLD",
+          "name": "Currency Transaction Report Threshold",
+          "description": "US CTR reporting requirement for cash transactions",
+          "condition": {
+            "amount": { "gte": 10000 },
+            "currency": "USD",
+            "transaction_type": ["payment", "cash_in", "cash_out"]
+          },
+          "action": "FLAG_FOR_CTR",
+          "jurisdiction": "US",
+          "regulation": "31 CFR 1020.320",
+          "severity": "high",
+          "auto_report": true
+        },
+        {
+          "id": "LARGE_TRANSACTION",
+          "name": "Large Transaction Monitoring",
+          "description": "Monitor large transactions for potential structuring",
+          "condition": {
+            "amount": { "gte": 5000 },
+            "currency": ["USD", "EUR", "GBP"]
+          },
+          "action": "ENHANCED_MONITORING",
+          "severity": "medium",
+          "auto_report": false
+        },
+        {
+          "id": "CRYPTO_LARGE",
+          "name": "Large Cryptocurrency Transaction",
+          "description": "Monitor large crypto transactions",
+          "condition": {
+            "amount": { "gte": 1000 },
+            "currency": ["XRP", "BTC", "ETH"],
+            "chain": ["XRP", "Bitcoin", "Ethereum"]
+          },
+          "action": "RISK_ASSESSMENT",
+          "severity": "medium",
+          "auto_report": false
+        }
+      ]
+    },
+    
+    "velocity_patterns": {
+      "description": "Transaction velocity and frequency patterns",
+      "rules": [
+        {
+          "id": "RAPID_SUCCESSION",
+          "name": "Rapid Succession Transactions",
+          "description": "Multiple transactions in short time period",
+          "condition": {
+            "time_window": "1 hour",
+            "transaction_count": { "gte": 10 },
+            "same_address": true
+          },
+          "action": "VELOCITY_ALERT",
+          "severity": "high",
+          "auto_report": false
+        },
+        {
+          "id": "STRUCTURING_PATTERN",
+          "name": "Potential Structuring",
+          "description": "Multiple transactions just below reporting thresholds",
+          "condition": {
+            "time_window": "24 hours",
+            "amount_range": { "gte": 9000, "lt": 10000 },
+            "transaction_count": { "gte": 3 }
+          },
+          "action": "STRUCTURING_ALERT",
+          "severity": "high",
+          "auto_report": true
+        },
+        {
+          "id": "UNUSUAL_VOLUME",
+          "name": "Unusual Transaction Volume",
+          "description": "Transaction volume significantly above historical average",
+          "condition": {
+            "time_window": "24 hours",
+            "volume_multiplier": { "gte": 5 }
+          },
+          "action": "VOLUME_ALERT",
+          "severity": "medium",
+          "auto_report": false
+        }
+      ]
+    },
+    
+    "address_reputation": {
+      "description": "Address-based risk assessment rules",
+      "rules": [
+        {
+          "id": "SANCTIONED_ADDRESS",
+          "name": "Sanctioned Address Interaction",
+          "description": "Transaction involving sanctioned addresses",
+          "condition": {
+            "address_type": "sanctioned",
+            "interaction": ["sender", "receiver"]
+          },
+          "action": "IMMEDIATE_BLOCK",
+          "severity": "critical",
+          "auto_report": true
+        },
+        {
+          "id": "HIGH_RISK_EXCHANGE",
+          "name": "High-Risk Exchange",
+          "description": "Transaction with high-risk exchange",
+          "condition": {
+            "address_category": "exchange",
+            "risk_rating": { "gte": 0.8 }
+          },
+          "action": "ENHANCED_DUE_DILIGENCE",
+          "severity": "high",
+          "auto_report": false
+        },
+        {
+          "id": "MIXER_INTERACTION",
+          "name": "Cryptocurrency Mixer",
+          "description": "Transaction involving known mixing services",
+          "condition": {
+            "address_category": "mixer",
+            "interaction": ["sender", "receiver"]
+          },
+          "action": "MIXER_ALERT",
+          "severity": "high",
+          "auto_report": true
+        },
+        {
+          "id": "NEW_ADDRESS",
+          "name": "New Address Interaction",
+          "description": "Transaction with newly created address",
+          "condition": {
+            "address_age": { "lt": "7 days" },
+            "amount": { "gte": 1000 }
+          },
+          "action": "NEW_ADDRESS_REVIEW",
+          "severity": "low",
+          "auto_report": false
+        }
+      ]
+    },
+    
+    "geographic_patterns": {
+      "description": "Geographic and jurisdictional risk patterns",
+      "rules": [
+        {
+          "id": "HIGH_RISK_JURISDICTION",
+          "name": "High-Risk Jurisdiction",
+          "description": "Transaction from/to high-risk jurisdiction",
+          "condition": {
+            "jurisdiction": ["AF", "IR", "KP", "SY", "MM"],
+            "amount": { "gte": 100 }
+          },
+          "action": "JURISDICTION_ALERT",
+          "severity": "high",
+          "auto_report": true
+        },
+        {
+          "id": "CROSS_BORDER_LARGE",
+          "name": "Large Cross-Border Transaction",
+          "description": "Large transactions crossing jurisdictions",
+          "condition": {
+            "cross_border": true,
+            "amount": { "gte": 5000 }
+          },
+          "action": "CROSS_BORDER_REVIEW",
+          "severity": "medium",
+          "auto_report": false
+        }
+      ]
+    },
+    
+    "behavioral_patterns": {
+      "description": "Behavioral and pattern-based risk indicators",
+      "rules": [
+        {
+          "id": "ROUND_AMOUNT_PATTERN",
+          "name": "Round Amount Pattern",
+          "description": "Frequent use of round amounts",
+          "condition": {
+            "amount_pattern": "round_numbers",
+            "frequency": { "gte": 5 },
+            "time_window": "7 days"
+          },
+          "action": "PATTERN_ALERT",
+          "severity": "low",
+          "auto_report": false
+        },
+        {
+          "id": "UNUSUAL_TIMING",
+          "name": "Unusual Transaction Timing",
+          "description": "Transactions at unusual hours",
+          "condition": {
+            "time_range": ["00:00", "05:00"],
+            "amount": { "gte": 5000 }
+          },
+          "action": "TIMING_ALERT",
+          "severity": "low",
+          "auto_report": false
+        },
+        {
+          "id": "CHAIN_TRANSACTION",
+          "name": "Chain Transaction Pattern",
+          "description": "Rapid sequential transactions across multiple addresses",
+          "condition": {
+            "chain_length": { "gte": 5 },
+            "time_window": "1 hour",
+            "amount_consistency": true
+          },
+          "action": "CHAIN_ALERT",
+          "severity": "medium",
+          "auto_report": false
+        }
+      ]
+    }
+  },
+  
+  "action_definitions": {
+    "IMMEDIATE_BLOCK": {
+      "description": "Immediately block transaction and freeze funds",
+      "priority": 1,
+      "notification": ["compliance_team", "management"],
+      "escalation": "immediate"
+    },
+    "FLAG_FOR_CTR": {
+      "description": "Flag transaction for Currency Transaction Report filing",
+      "priority": 2,
+      "notification": ["compliance_team"],
+      "escalation": "within_24_hours"
+    },
+    "ENHANCED_DUE_DILIGENCE": {
+      "description": "Perform enhanced due diligence on customer",
+      "priority": 3,
+      "notification": ["compliance_analyst"],
+      "escalation": "within_48_hours"
+    },
+    "RISK_ASSESSMENT": {
+      "description": "Perform detailed risk assessment",
+      "priority": 4,
+      "notification": ["risk_team"],
+      "escalation": "within_72_hours"
+    },
+    "ENHANCED_MONITORING": {
+      "description": "Place account under enhanced monitoring",
+      "priority": 5,
+      "notification": ["monitoring_team"],
+      "escalation": "within_1_week"
+    }
+  },
+  
+  "severity_levels": {
+    "critical": {
+      "score_range": [0.9, 1.0],
+      "color": "#ff0000",
+      "auto_escalate": true,
+      "max_response_time": "immediate"
+    },
+    "high": {
+      "score_range": [0.7, 0.89],
+      "color": "#ff6600",
+      "auto_escalate": false,
+      "max_response_time": "24 hours"
+    },
+    "medium": {
+      "score_range": [0.4, 0.69],
+      "color": "#ffaa00",
+      "auto_escalate": false,
+      "max_response_time": "72 hours"
+    },
+    "low": {
+      "score_range": [0.1, 0.39],
+      "color": "#ffff00",
+      "auto_escalate": false,
+      "max_response_time": "1 week"
+    },
+    "minimal": {
+      "score_range": [0.0, 0.09],
+      "color": "#00ff00",
+      "auto_escalate": false,
+      "max_response_time": "monthly_review"
+    }
+  },
+  
+  "jurisdictional_settings": {
+    "US": {
+      "ctr_threshold": 10000,
+      "sar_threshold": 5000,
+      "currency": "USD",
+      "reporting_entity": "FinCEN",
+      "regulations": ["BSA", "USA PATRIOT Act"]
+    },
+    "EU": {
+      "ctr_threshold": 15000,
+      "sar_threshold": 15000,
+      "currency": "EUR",
+      "reporting_entity": "FIU",
+      "regulations": ["AMLD5", "AMLD6"]
+    },
+    "UK": {
+      "ctr_threshold": 10000,
+      "sar_threshold": null,
+      "currency": "GBP",
+      "reporting_entity": "NCA",
+      "regulations": ["MLR 2017"]
+    }
+  },
+  
+  "risk_factors": {
+    "transaction_amount": {
+      "weight": 0.3,
+      "calculation": "amount_percentile",
+      "thresholds": [1000, 5000, 10000, 50000]
+    },
+    "address_reputation": {
+      "weight": 0.25,
+      "calculation": "reputation_score",
+      "sources": ["internal", "external_feeds"]
+    },
+    "transaction_velocity": {
+      "weight": 0.2,
+      "calculation": "velocity_score",
+      "time_windows": ["1h", "24h", "7d"]
+    },
+    "behavioral_patterns": {
+      "weight": 0.15,
+      "calculation": "pattern_score",
+      "patterns": ["timing", "amounts", "frequency"]
+    },
+    "geographic_risk": {
+      "weight": 0.1,
+      "calculation": "jurisdiction_score",
+      "risk_lists": ["FATF", "OFAC", "EU"]
+    }
+  },
+  
+  "metadata": {
+    "schema_version": "1.0.0",
+    "created_by": "Klerno Labs Compliance Team",
+    "last_reviewed": "2025-01-27",
+    "next_review": "2025-04-27",
+    "approved_by": "Chief Compliance Officer",
+    "effective_date": "2025-01-27",
+    "change_log": [
+      {
+        "version": "1.0.0",
+        "date": "2025-01-27",
+        "changes": "Initial rule set creation",
+        "author": "Compliance Team"
+      }
+    ]
+  }
+}
