@@ -1,4 +1,3 @@
-# app/main.py
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -165,11 +164,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[HTMLResponse]]):
         resp = await call_next(request)
+        # UPDATED CSP: allow jsDelivr for Bootstrap & Chart.js
         csp = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "img-src 'self' data:; "
+            "font-src 'self' data: https://cdn.jsdelivr.net; "
             "connect-src 'self' ws: wss:; "
             "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
         )
